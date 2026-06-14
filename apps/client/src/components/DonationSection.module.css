@@ -1,0 +1,221 @@
+.donation {
+  background: linear-gradient(135deg, #fff9f5 0%, #fff4ed 100%);
+}
+
+.title {
+  font-size: 2.25rem;
+  color: #f2561a;
+  margin-bottom: 0.5rem;
+  text-align: center;
+}
+
+.subtitle {
+  font-size: 1.125rem;
+  color: #4a4a48;
+  text-align: center;
+  margin-bottom: 3rem;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.formContainer {
+  background: white;
+  border-radius: 1rem;
+  padding: 3rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.amountsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.amountButton {
+  padding: 1rem;
+  border: 2px solid #e0e0e0;
+  border-radius: 0.75rem;
+  background: white;
+  color: #1a1a18;
+  font-size: 1.125rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 300ms ease-in-out;
+}
+
+.amountButton:hover {
+  border-color: #f2561a;
+  color: #f2561a;
+}
+
+.amountButton.active {
+  background: #f2561a;
+  border-color: #f2561a;
+  color: white;
+}
+
+.customAmountGroup {
+  margin-bottom: 2rem;
+}
+
+.label {
+  display: block;
+  font-size: 0.95rem;
+  color: #1a1a18;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+
+.inputWrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input {
+  width: 100%;
+  padding: 0.875rem 2.5rem 0.875rem 1rem;
+  border: 2px solid #e0e0e0;
+  border-radius: 0.75rem;
+  font-size: 1rem;
+  transition: all 300ms ease-in-out;
+  font-family: var(--font-family-hebrew);
+}
+
+.input:focus {
+  outline: none;
+  border-color: #f2561a;
+  box-shadow: 0 0 0 3px rgba(242, 86, 26, 0.1);
+}
+
+.currencySymbol {
+  position: absolute;
+  left: 1rem;
+  color: #999;
+  font-weight: 600;
+}
+
+.securityInfo {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #f8f8f6;
+  border-radius: 0.75rem;
+  margin-bottom: 2rem;
+  font-size: 0.95rem;
+  color: #4a4a48;
+}
+
+.securityInfo span {
+  font-size: 1.25rem;
+}
+
+.donateButton {
+  width: 100%;
+  padding: 1rem;
+  background: linear-gradient(135deg, #f2561a 0%, #ff6b35 100%);
+  color: white;
+  font-size: 1.125rem;
+  font-weight: 700;
+  border: none;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  transition: all 300ms ease-in-out;
+  box-shadow: 0 4px 15px rgba(242, 86, 26, 0.3);
+}
+
+.donateButton:hover:not(:disabled) {
+  box-shadow: 0 8px 25px rgba(242, 86, 26, 0.4);
+}
+
+.donateButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.donateButton:focus-visible {
+  outline: 2px solid #f2561a;
+  outline-offset: 2px;
+}
+
+.successMessage {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9999;
+}
+
+.successContent {
+  background: white;
+  padding: 2rem;
+  border-radius: 1rem;
+  text-align: center;
+  box-shadow: 0 15px 50px rgba(0, 0, 0, 0.2);
+  min-width: 300px;
+}
+
+.checkmark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  background: linear-gradient(135deg, #f2561a 0%, #ff6b35 100%);
+  color: white;
+  border-radius: 50%;
+  font-size: 2rem;
+  margin-bottom: 1rem;
+}
+
+.successContent h3 {
+  color: #f2561a;
+  margin-bottom: 0.5rem;
+}
+
+.successContent p {
+  color: #666;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 768px) {
+  .title {
+    font-size: 1.875rem;
+  }
+
+  .subtitle {
+    font-size: 1rem;
+  }
+
+  .formContainer {
+    padding: 2rem;
+  }
+
+  .amountsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .formContainer {
+    padding: 1.5rem;
+  }
+
+  .amountsGrid {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .amountButton {
+    padding: 0.875rem;
+  }
+
+  .successContent {
+    min-width: 280px;
+  }
+}

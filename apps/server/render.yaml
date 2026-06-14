@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: united-hatzalah-api
+    runtime: node
+    runtimeVersion: 20
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: FRONTEND_URL
+        value: https://frontend-five-ruddy-ztsl9rllwx.vercel.app
+      - key: DATABASE_URL
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+    autoDeploy: true
+    github:
+      branch: main
+      deployOnPush: true

@@ -1,0 +1,90 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Donor/Sponsor Model
+model Donor {
+  id        String   @id @default(uuid())
+  name      String
+  category  String   // "Partner" or "Sponsor"
+  logo      String?  // URL to logo image (optional)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Donation Model
+model Donation {
+  id         String   @id @default(uuid())
+  amount     Float
+  donorName  String
+  donorEmail String
+  message    String?
+  status     String   @default("pending") // "pending", "completed", "failed"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// Admin User Model
+model Admin {
+  id        String    @id @default(uuid())
+  email     String    @unique
+  name      String
+  picture   String?
+  isActive  Boolean   @default(true)
+  lastLogin DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+// Gallery Item Model
+model GalleryItem {
+  id        String   @id @default(uuid())
+  title     String
+  category  String   // "training", "emergency", "equipment", "events"
+  imageUrl  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Story Model
+model Story {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  date        String
+  image       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Statistics Items Model (each metric is its own record)
+model StatItem {
+  id        String   @id @default(uuid())
+  title     String
+  value     Float
+  unit      String?
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Contact Message Model
+model ContactMessage {
+  id        String   @id @default(uuid())
+  name      String
+  email     String
+  phone     String?
+  subject   String
+  message   String
+  status    String   @default("pending") // "pending", "read", "replied"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

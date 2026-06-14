@@ -1,0 +1,26 @@
+{
+  "name": "united-hatzalah-shoham-branch",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Full-stack monorepo for the United Hatzalah Shoham branch website and admin API.",
+  "type": "module",
+  "workspaces": [
+    "apps/client",
+    "apps/server"
+  ],
+  "scripts": {
+    "dev:client": "npm run dev --workspace @united-hatzalah-shoham-branch/client",
+    "dev:server": "npm run dev --workspace @united-hatzalah-shoham-branch/server",
+    "build": "npm run build --workspaces",
+    "build:client": "npm run build --workspace @united-hatzalah-shoham-branch/client",
+    "build:server": "npm run build --workspace @united-hatzalah-shoham-branch/server",
+    "lint": "npm run lint --workspaces",
+    "lint:client": "npm run lint --workspace @united-hatzalah-shoham-branch/client",
+    "lint:server": "npm run lint --workspace @united-hatzalah-shoham-branch/server",
+    "format": "npm run format --workspaces",
+    "prisma:generate": "npm run prisma:generate --workspace @united-hatzalah-shoham-branch/server"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

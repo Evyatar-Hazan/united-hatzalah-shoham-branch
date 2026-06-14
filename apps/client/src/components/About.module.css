@@ -1,0 +1,69 @@
+.about {
+  background: white;
+}
+
+.title {
+  font-size: 2.25rem;
+  color: #f2561a;
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+.description {
+  font-size: 1.125rem;
+  color: #1a1a18;
+  margin-bottom: 3rem;
+  text-align: center;
+  max-width: 700px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.8;
+}
+
+.valuesGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 2rem;
+  margin-top: 2rem;
+}
+
+.valueCard {
+  background: linear-gradient(135deg, #fff9f5 0%, #fff4ed 100%);
+  padding: 2rem;
+  border-radius: 0.75rem;
+  border-left: 4px solid #f2561a;
+  text-align: center;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+  transition: all 300ms ease-in-out;
+}
+
+.valueCard h3 {
+  color: #f2561a;
+  margin-bottom: 0.75rem;
+  font-size: 1.25rem;
+}
+
+.valueCard p {
+  color: #4a4a48;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.valueCard:hover {
+  box-shadow: 0 10px 20px rgba(242, 86, 26, 0.1);
+}
+
+@media (max-width: 768px) {
+  .title {
+    font-size: 1.875rem;
+  }
+
+  .description {
+    font-size: 1rem;
+  }
+
+  .valuesGrid {
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+  }
+}

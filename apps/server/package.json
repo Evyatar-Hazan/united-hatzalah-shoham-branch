@@ -1,0 +1,53 @@
+{
+  "name": "@united-hatzalah-shoham-branch/server",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc && PRISMA_SKIP_ENGINE_CHECK=1 prisma generate --schema prisma/schema.prisma",
+    "start": "node dist/index.js",
+    "seed": "ts-node prisma/seed.ts",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write .",
+    "test": "echo \"No automated tests configured yet\"",
+    "prepare": "husky",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "vercel-build": "npm run build"
+  },
+  "keywords": [],
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@prisma/client": "^5.13.0",
+    "cloudinary": "^2.9.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "multer": "^2.0.2",
+    "prisma": "^5.13.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.3.1",
+    "@commitlint/config-conventional": "^20.3.1",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^25.0.10",
+    "@typescript-eslint/eslint-plugin": "^8.53.0",
+    "@typescript-eslint/parser": "^8.53.0",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-node": "^11.1.0",
+    "eslint-plugin-prettier": "^5.5.5",
+    "husky": "^9.1.7",
+    "prettier": "^3.8.0"
+  }
+}
