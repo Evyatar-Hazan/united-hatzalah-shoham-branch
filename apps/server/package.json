@@ -2,7 +2,7 @@
   "name": "@united-hatzalah-shoham-branch/server",
   "version": "1.0.0",
   "description": "",
-  "type": "module",
+  "type": "commonjs",
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node src/index.ts",

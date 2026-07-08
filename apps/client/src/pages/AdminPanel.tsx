@@ -88,7 +88,7 @@ interface Donor {
   logo?: string;
 }
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 type EditingItem = GalleryItem | Story | Admin | Donation | Donor | StatItem | Record<string, unknown> | null;
 type FormDataType = Record<string, string | undefined>;

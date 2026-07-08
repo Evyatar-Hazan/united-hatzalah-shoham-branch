@@ -54,7 +54,7 @@ export class DonationService {
     try {
       const donations = await prisma.donation.findMany();
       const totalDonations = donations.length;
-      const totalAmount = donations.reduce((sum, donation) => {
+      const totalAmount = donations.reduce<number>((sum, donation) => {
         return sum + donation.amount;
       }, 0);
 

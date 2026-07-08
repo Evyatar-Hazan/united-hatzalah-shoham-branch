@@ -1,0 +1,9 @@
+name = "united-hatzalah-shoham-branch"
+compatibility_date = "2026-06-24"
+pages_build_output_dir = "apps/client/dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "united-hatzalah-shoham-branch"
+database_id = "d5ef1fe8-225c-4135-b6a5-3bfd0fb584a2"
+preview_database_id = "d5ef1fe8-225c-4135-b6a5-3bfd0fb584a2"

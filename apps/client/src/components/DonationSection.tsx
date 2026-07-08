@@ -4,7 +4,7 @@ import { useScrollTrigger } from '../hooks/useScrollTrigger';
 import styles from './DonationSection.module.css';
 
 const PRESET_AMOUNTS = [50, 100, 250, 500];
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 const DonationSection: React.FC = () => {
   const { ref, isVisible } = useScrollTrigger();

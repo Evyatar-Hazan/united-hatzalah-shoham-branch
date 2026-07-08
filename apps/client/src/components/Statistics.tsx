@@ -69,7 +69,7 @@ const Statistics: React.FC = () => {
   useEffect(() => {
     const load = async () => {
       try {
-        const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+        const apiUrl = import.meta.env.VITE_API_URL || '';
         const res = await fetch(`${apiUrl}/api/statistics`);
         const json = await res.json();
         if (json?.success && Array.isArray(json.data)) {

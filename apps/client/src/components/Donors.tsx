@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { useScrollTrigger } from '../hooks/useScrollTrigger';
 import styles from './Donors.module.css';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 interface Donor {
   id: string;

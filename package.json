@@ -12,13 +12,18 @@
     "dev:client": "npm run dev --workspace @united-hatzalah-shoham-branch/client",
     "dev:server": "npm run dev --workspace @united-hatzalah-shoham-branch/server",
     "build": "npm run build --workspaces",
+    "build:cloudflare": "npm run build:client",
     "build:client": "npm run build --workspace @united-hatzalah-shoham-branch/client",
     "build:server": "npm run build --workspace @united-hatzalah-shoham-branch/server",
     "lint": "npm run lint --workspaces",
     "lint:client": "npm run lint --workspace @united-hatzalah-shoham-branch/client",
     "lint:server": "npm run lint --workspace @united-hatzalah-shoham-branch/server",
     "format": "npm run format --workspaces",
-    "prisma:generate": "npm run prisma:generate --workspace @united-hatzalah-shoham-branch/server"
+    "prisma:generate": "npm run prisma:generate --workspace @united-hatzalah-shoham-branch/server",
+    "d1:migrate:local": "wrangler d1 migrations apply united-hatzalah-shoham-branch --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply united-hatzalah-shoham-branch --remote",
+    "pages:dev": "npm run build:cloudflare && wrangler pages dev apps/client/dist --d1 DB=united-hatzalah-shoham-branch --compatibility-date=2026-06-24",
+    "pages:deploy": "npm run build:cloudflare && wrangler pages deploy apps/client/dist --project-name united-hatzalah-shoham-branch --branch main"
   },
   "engines": {
     "node": ">=20"

@@ -10,7 +10,7 @@ interface GalleryItem {
   imageUrl?: string;
 }
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 // Custom hook for image lazy loading with Intersection Observer
 const useImageLazyLoad = (ref: React.RefObject<HTMLImageElement | null>) => {

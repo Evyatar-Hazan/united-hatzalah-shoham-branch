@@ -19,7 +19,7 @@ interface ContactInfo {
   };
 }
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = import.meta.env.VITE_API_URL || '';
 
 const Contact: React.FC = () => {
   const { ref, isVisible } = useScrollTrigger();
@@ -81,7 +81,10 @@ const Contact: React.FC = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          subject: 'פנייה מהאתר',
+        }),
       });
 
       if (response.ok) {
