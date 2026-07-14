@@ -1,10 +1,11 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { useScrollTrigger } from '../hooks/useScrollTrigger';
+import { branchGalleryFallback } from '../content/branchContent';
 import styles from './Gallery.module.css';
 
 interface GalleryItem {
-  id: number;
+  id: string | number;
   title: string;
   category: string;
   imageUrl?: string;
@@ -12,50 +13,11 @@ interface GalleryItem {
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
-// Custom hook for image lazy loading with Intersection Observer
-const useImageLazyLoad = (ref: React.RefObject<HTMLImageElement | null>) => {
-  const [isLoaded, setIsLoaded] = useState(false);
-
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      entries => {
-        if (entries[0].isIntersecting) {
-          const img = ref.current;
-          if (img) {
-            img.src = img.dataset.src || '';
-            img.onload = () => setIsLoaded(true);
-            observer.unobserve(img);
-          }
-        }
-      },
-      { threshold: 0.01 }
-    );
-
-    const currentRef = ref.current;
-
-    if (currentRef) {
-      observer.observe(currentRef);
-    }
-
-    return () => {
-      if (currentRef) {
-        observer.unobserve(currentRef);
-      }
-    };
-  }, [ref]);
-
-  return isLoaded;
-};
-
-// Gallery Item Component with Lazy Loading
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const GalleryItemComponent: React.FC<{ item: GalleryItem; variants: any }> = ({
   item,
   variants,
 }) => {
-  const imgRef = useRef<HTMLImageElement>(null);
-  const isLoaded = useImageLazyLoad(imgRef);
-
   return (
     <motion.div
       className={styles.item}
@@ -64,13 +26,11 @@ const GalleryItemComponent: React.FC<{ item: GalleryItem; variants: any }> = ({
     >
       <div className={styles.itemImage}>
         <img
-          ref={imgRef}
-          data-src={item.imageUrl}
+          src={item.imageUrl}
           alt={item.title}
-          className={`${styles.lazyImage} ${isLoaded ? styles.loaded : ''}`}
+          className={`${styles.lazyImage} ${styles.loaded}`}
           loading="lazy"
         />
-        {!isLoaded && <div className={styles.placeholder}></div>}
       </div>
       <div className={styles.itemInfo}>
         <p className={styles.itemCategory}>{item.category}</p>
@@ -82,7 +42,7 @@ const GalleryItemComponent: React.FC<{ item: GalleryItem; variants: any }> = ({
 
 const Gallery: React.FC = () => {
   const { ref, isVisible } = useScrollTrigger();
-  const [galleryItems, setGalleryItems] = useState<GalleryItem[]>([]);
+  const [galleryItems, setGalleryItems] = useState<GalleryItem[]>(branchGalleryFallback);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -91,10 +51,15 @@ const Gallery: React.FC = () => {
         const response = await fetch(`${API_URL}/api/media/gallery`);
         if (response.ok) {
           const result = await response.json();
-          setGalleryItems(result.data || []);
+          const items = Array.isArray(result.data) ? result.data : [];
+          const hasRealImages = items.some(
+            (item: GalleryItem) => item.imageUrl && !item.imageUrl.includes('placehold.co')
+          );
+          setGalleryItems(hasRealImages ? items : branchGalleryFallback);
         }
       } catch (error) {
         console.error('Failed to fetch gallery:', error);
+        setGalleryItems(branchGalleryFallback);
       } finally {
         setLoading(false);
       }
@@ -125,7 +90,7 @@ const Gallery: React.FC = () => {
 
   if (loading) {
     return (
-      <section ref={ref} className={`${styles.gallery} section`}>
+      <section ref={ref} className={`${styles.gallery} section`} id="gallery">
         <div className="container">
           <h2 className={styles.title}>גלריית מדיה</h2>
           <p>טוען...</p>
@@ -135,9 +100,13 @@ const Gallery: React.FC = () => {
   }
 
   return (
-    <section ref={ref} className={`${styles.gallery} section`}>
+    <section ref={ref} className={`${styles.gallery} section`} id="gallery">
       <div className="container">
-        <h2 className={styles.title}>גלריית מדיה</h2>
+        <h2 className={styles.title}>הסניף בפעילות</h2>
+        <p className={styles.lead}>
+          מבט ישיר לשטח: אימונים, כוננות, קהילה, ציוד ורגעים שמספרים איך נראה מענה
+          רפואי מקומי כשהוא חי ופועל באמת.
+        </p>
         <motion.div
           className={styles.grid}
           variants={containerVariants}

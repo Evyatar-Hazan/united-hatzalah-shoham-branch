@@ -99,13 +99,17 @@ INSERT OR IGNORE INTO donors (id, name, category, logo) VALUES
   ('donor-3', 'סופרמרקט שומרון', 'תורם', NULL);
 
 INSERT OR IGNORE INTO stories (id, title, description, date, image) VALUES
-  ('story-1', 'הגעה מהירה לקריאת חירום', 'מתנדבי הסניף הגיעו בתוך דקות והעניקו טיפול ראשוני עד להגעת צוותי המשך.', '2026-01-20', NULL),
-  ('story-2', 'הדרכת עזרה ראשונה לקהילה', 'הסניף קיים הדרכה מעשית לתושבים והרחיב את מעגל האנשים שיודעים להגיב בשעת חירום.', '2026-01-10', NULL);
+  ('story-1', 'שומרים על כשירות בכל רגע', 'הסניף משקיע באופן שוטף באימוני החייאה, ציוד ותרחישי אמת כדי שכל מתנדב יגיע מוכן לדקות הקריטיות ביותר.', '2026-07-14', '/images/shoham/hero-training.jpg'),
+  ('story-2', 'נוכחות קהילתית שמחזקת ביטחון', 'בין קריאה לקריאה, מתנדבי הסניף נמצאים בשטח, באירועים ובמפגשי קהילה כדי להיות קרובים לתושבים גם בשגרה.', '2026-07-14', '/images/shoham/volunteers-standby.jpg'),
+  ('story-3', 'ציוד, שותפים ואנשים טובים', 'תרומות ושותפויות מקומיות מאפשרות לסניף להרחיב ציוד, לייעל תגובה ולשמור על רמת מוכנות מבצעית גבוהה.', '2026-07-14', '/images/shoham/equipment-donation.jpg');
 
 INSERT OR IGNORE INTO gallery_items (id, title, category, imageUrl) VALUES
-  ('gallery-1', 'הדרכת מתנדבים', 'הכשרה', 'https://placehold.co/800x600/f2561a/ffffff?text=Training'),
-  ('gallery-2', 'ציוד רפואי', 'ציוד', 'https://placehold.co/800x600/1a1a18/ffffff?text=Equipment'),
-  ('gallery-3', 'פעילות קהילתית', 'קהילה', 'https://placehold.co/800x600/ff6b35/ffffff?text=Community');
+  ('gallery-1', 'תרגול רפואת חירום והחייאה', 'הכשרה', '/images/shoham/hero-training.jpg'),
+  ('gallery-2', 'נוכחות מתנדבים באירועי קהילה', 'קהילה', '/images/shoham/volunteers-standby.jpg'),
+  ('gallery-3', 'ערב הוקרה לפעילי הסניף', 'קהילה', '/images/shoham/community-evening.jpg'),
+  ('gallery-4', 'מפגש צוות והיערכות מבצעית', 'מתנדבים', '/images/shoham/community-table.jpg'),
+  ('gallery-5', 'ציוד שנתרם לפעילות הסניף', 'ציוד', '/images/shoham/equipment-donation.jpg'),
+  ('gallery-6', 'אמבולנס הקהילה בפעילות חינוכית', 'הסברה', '/images/shoham/ambulance-mascot.jpg');
 
 INSERT OR IGNORE INTO contact_info (
   id,

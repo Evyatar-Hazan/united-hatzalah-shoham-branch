@@ -33,30 +33,14 @@ const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
 
-  const handleMockLogin = React.useCallback(async () => {
-    setError(null);
-    try {
-      // Use the email address from seed data
-      const mockEmail = 'admin@shoham.united-hatzalah.org.il';
-      await login(mockEmail);
-      navigate('/admin');
-    } catch (err) {
-      setError('נכשל בהתחברות. אנא נסה שוב.');
-      console.error('Login error:', err);
-    }
-  }, [login, navigate]);
-
   const handleGoogleCallback = React.useCallback(async (response: GoogleResponse) => {
     setError(null);
     try {
-      console.log('Google callback received, credential length:', response.credential.length);
       await login(response.credential);
-      console.log('Login successful, navigating to admin');
       navigate('/admin');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'נכשל בהתחברות. אנא נסה שוב.';
       setError(errorMessage);
-      console.error('Login error:', err);
     }
   }, [login, navigate]);
 
@@ -111,20 +95,6 @@ const LoginPage: React.FC = () => {
           <div id="google-signin-button" className={styles.googleButton}></div>
 
           {isLoading && <div className={styles.loading}>טוען...</div>}
-
-          {/* Mock Login - Local Development Only */}
-          {import.meta.env.DEV && (
-            <div className={styles.mockLoginSection}>
-              <p className={styles.mockLabel}>📌 מצב פיתוח - התחברות ללא אמות:</p>
-              <button
-                onClick={handleMockLogin}
-                disabled={isLoading}
-                className={styles.mockLoginButton}
-              >
-                {isLoading ? 'מתחבר...' : 'התחברות כמנהל (Mock)'}
-              </button>
-            </div>
-          )}
         </div>
 
         <div className={styles.footer}>

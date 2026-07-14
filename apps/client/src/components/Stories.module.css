@@ -5,8 +5,16 @@
 .title {
   font-size: 2.25rem;
   color: #f2561a;
-  margin-bottom: 3rem;
+  margin-bottom: 1rem;
   text-align: center;
+}
+
+.lead {
+  max-width: 760px;
+  margin: 0 auto 2.5rem;
+  text-align: center;
+  color: #505866;
+  line-height: 1.8;
 }
 
 .carousel {
@@ -45,8 +53,8 @@
   max-height: 100%;
   min-height: 0;
   width: 100%;
-  height: 100vh;
-
+  min-height: 320px;
+  min-width: 0;
 }
 
 .storyImage {
@@ -64,11 +72,11 @@
   display: flex;
   flex-direction: column;
   flex: 1;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
-  overflow-y: auto;
   padding-right: 0.5rem;
   text-align: right;
-  height: 100%;
 }
 
 
@@ -88,30 +96,7 @@
   word-wrap: break-word;
   overflow-wrap: break-word;
   white-space: normal;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
-  padding-right: 0.5rem;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(242, 86, 26, 0.3) transparent;
   white-space: pre-wrap;
-}
-
-.storyDescription::-webkit-scrollbar {
-  width: 6px;
-}
-
-.storyDescription::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.storyDescription::-webkit-scrollbar-thumb {
-  background: rgba(242, 86, 26, 0.3);
-  border-radius: 3px;
-}
-
-.storyDescription::-webkit-scrollbar-thumb:hover {
-  background: rgba(242, 86, 26, 0.5);
 }
 
 .storyDate {
@@ -231,15 +216,21 @@
 
   .carousel {
     padding: 1.5rem;
-    height: 500px;
+    height: auto;
   }
 
   .carouselContent {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
     padding: 0;
+    overflow: visible;
   }
 
   .storyCard {
     min-height: 0;
+    width: 100%;
+    flex: 0 0 auto;
     flex-direction: column;
     align-items: center;
     gap: 1.5rem;
@@ -253,7 +244,7 @@
   .storyContent {
     text-align: center;
     padding-top: 0;
-    max-height: auto;
+    max-height: none;
   }
 
   .storyTitle {
@@ -266,16 +257,19 @@
 
   .controls {
     position: static;
+    flex: 0 0 auto;
     flex-direction: row;
     padding: 0;
     height: auto;
     width: 100%;
-    margin-top: 0;
+    margin-top: 1.25rem;
     justify-content: center;
     gap: 1rem;
   }
 
-  .navButton {
+  .navButton,
+  .navButton:first-child,
+  .navButton:last-child {
     width: 35px;
     height: 35px;
     padding: 0;
@@ -300,7 +294,7 @@
 @media (max-width: 480px) {
   .carousel {
     padding: 1rem;
-    height: 550px;
+    height: auto;
   }
 
   .carouselContent {
@@ -337,7 +331,9 @@
     gap: 0.75rem;
   }
 
-  .navButton {
+  .navButton,
+  .navButton:first-child,
+  .navButton:last-child {
     width: 32px;
     height: 32px;
     padding: 0;

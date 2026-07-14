@@ -1,3 +1,5 @@
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
     status,
@@ -12,6 +14,8 @@ const json = (data, status = 200) =>
 const ok = (data, message) => json({ success: true, data, message, timestamp: new Date().toISOString() });
 const fail = (error, status = 400) => json({ success: false, error, timestamp: new Date().toISOString() }, status);
 const id = () => crypto.randomUUID();
+const GOOGLE_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
+const GOOGLE_JWKS = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
 
 const parseBody = async (request) => {
   const contentType = request.headers.get('content-type') || '';
@@ -40,10 +44,11 @@ CREATE TABLE IF NOT EXISTS stat_items (id TEXT PRIMARY KEY, title TEXT NOT NULL,
 CREATE TABLE IF NOT EXISTS contact_messages (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT, subject TEXT NOT NULL, message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS contact_info (id TEXT PRIMARY KEY DEFAULT 'main', phone TEXT NOT NULL, email TEXT NOT NULL, address TEXT NOT NULL, emergencyNumber TEXT NOT NULL, facebook TEXT NOT NULL DEFAULT '#', instagram TEXT NOT NULL DEFAULT '#', whatsapp TEXT NOT NULL DEFAULT '#', weekday TEXT NOT NULL DEFAULT '08:00 - 18:00', weekend TEXT NOT NULL DEFAULT '09:00 - 17:00', updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 INSERT OR IGNORE INTO admins (id, email, name, isActive) VALUES ('admin-default', 'admin@shoham.united-hatzalah.org.il', 'מנהל סניף שוהם', 1);
+INSERT OR IGNORE INTO admins (id, email, name, isActive) VALUES ('admin-evyatar', 'evyatarhazan3.14@gmail.com', 'Evyatar Hazan', 1);
 INSERT OR IGNORE INTO stat_items (id, title, value, unit, sortOrder) VALUES ('stat-volunteers', 'מתנדבים פעילים', 247, NULL, 1), ('stat-calls', 'קריאות חירום בשנה', 3847, NULL, 2), ('stat-response', 'זמן תגובה ממוצע', 4.2, 'דקות', 3), ('stat-availability', 'זמינות מערכת', 99.8, '%', 4);
 INSERT OR IGNORE INTO donors (id, name, category, logo) VALUES ('donor-1', 'בנק הפועלים', 'שותף קבוע', NULL), ('donor-2', 'דן תחבורה', 'תורם', NULL), ('donor-3', 'סופרמרקט שומרון', 'תורם', NULL);
-INSERT OR IGNORE INTO stories (id, title, description, date, image) VALUES ('story-1', 'הגעה מהירה לקריאת חירום', 'מתנדבי הסניף הגיעו בתוך דקות והעניקו טיפול ראשוני עד להגעת צוותי המשך.', '2026-01-20', NULL), ('story-2', 'הדרכת עזרה ראשונה לקהילה', 'הסניף קיים הדרכה מעשית לתושבים והרחיב את מעגל האנשים שיודעים להגיב בשעת חירום.', '2026-01-10', NULL);
-INSERT OR IGNORE INTO gallery_items (id, title, category, imageUrl) VALUES ('gallery-1', 'הדרכת מתנדבים', 'הכשרה', 'https://placehold.co/800x600/f2561a/ffffff?text=Training'), ('gallery-2', 'ציוד רפואי', 'ציוד', 'https://placehold.co/800x600/1a1a18/ffffff?text=Equipment'), ('gallery-3', 'פעילות קהילתית', 'קהילה', 'https://placehold.co/800x600/ff6b35/ffffff?text=Community');
+INSERT OR IGNORE INTO stories (id, title, description, date, image) VALUES ('story-1', 'שומרים על כשירות בכל רגע', 'הסניף משקיע באופן שוטף באימוני החייאה, ציוד ותרחישי אמת כדי שכל מתנדב יגיע מוכן לדקות הקריטיות ביותר.', '2026-07-14', '/images/shoham/hero-training.jpg'), ('story-2', 'נוכחות קהילתית שמחזקת ביטחון', 'בין קריאה לקריאה, מתנדבי הסניף נמצאים בשטח, באירועים ובמפגשי קהילה כדי להיות קרובים לתושבים גם בשגרה.', '2026-07-14', '/images/shoham/volunteers-standby.jpg'), ('story-3', 'ציוד, שותפים ואנשים טובים', 'תרומות ושותפויות מקומיות מאפשרות לסניף להרחיב ציוד, לייעל תגובה ולשמור על רמת מוכנות מבצעית גבוהה.', '2026-07-14', '/images/shoham/equipment-donation.jpg');
+INSERT OR IGNORE INTO gallery_items (id, title, category, imageUrl) VALUES ('gallery-1', 'תרגול רפואת חירום והחייאה', 'הכשרה', '/images/shoham/hero-training.jpg'), ('gallery-2', 'נוכחות מתנדבים באירועי קהילה', 'קהילה', '/images/shoham/volunteers-standby.jpg'), ('gallery-3', 'ערב הוקרה לפעילי הסניף', 'קהילה', '/images/shoham/community-evening.jpg'), ('gallery-4', 'מפגש צוות והיערכות מבצעית', 'מתנדבים', '/images/shoham/community-table.jpg'), ('gallery-5', 'ציוד שנתרם לפעילות הסניף', 'ציוד', '/images/shoham/equipment-donation.jpg'), ('gallery-6', 'אמבולנס הקהילה בפעילות חינוכית', 'הסברה', '/images/shoham/ambulance-mascot.jpg');
 INSERT OR IGNORE INTO contact_info (id, phone, email, address, emergencyNumber, facebook, instagram, whatsapp) VALUES ('main', '+972-XX-XXX-XXXX', 'contact@shoham.united-hatzalah.org.il', 'איחוד הצלה סניף שוהם', '101', 'https://facebook.com/your-page', 'https://instagram.com/your-page', 'https://wa.me/your-number');
 `;
 
@@ -78,6 +83,33 @@ const requireAdmin = async (request, env) => {
   if (!email) return null;
   const admin = await first(env.DB, 'SELECT * FROM admins WHERE lower(email) = ? AND isActive = 1', email);
   return normalizeAdmin(admin);
+};
+
+const verifyGoogleIdToken = async (credential, env) => {
+  const audience = env.GOOGLE_CLIENT_ID;
+  if (!audience) {
+    throw new Error('GOOGLE_CLIENT_ID is not configured');
+  }
+
+  const { payload } = await jwtVerify(credential, GOOGLE_JWKS, {
+    audience,
+    issuer: GOOGLE_ISSUERS,
+  });
+
+  if (!payload.email || typeof payload.email !== 'string') {
+    throw new Error('Google token is missing email');
+  }
+
+  if (payload.email_verified !== true) {
+    throw new Error('Google email is not verified');
+  }
+
+  return {
+    email: payload.email.toLowerCase(),
+    name: typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim() : payload.email,
+    picture: typeof payload.picture === 'string' ? payload.picture : null,
+    sub: typeof payload.sub === 'string' ? payload.sub : null,
+  };
 };
 
 const tableConfig = {
@@ -225,15 +257,13 @@ const handlePublic = async (request, env, path) => {
 
   if (method === 'POST' && path === '/auth/google-verify') {
     const body = await parseBody(request);
-    if (!body.email || !body.name) return fail('email and name are required');
-    const email = String(body.email).toLowerCase();
+    if (!body.credential || typeof body.credential !== 'string') return fail('credential is required');
+    const googleUser = await verifyGoogleIdToken(body.credential, env);
+    const email = googleUser.email;
     const existing = await first(env.DB, 'SELECT * FROM admins WHERE lower(email) = ?', email);
+    if (!existing || !existing.isActive) return fail('Unauthorized or not an admin', 403);
     const now = new Date().toISOString();
-    if (!existing) {
-      await run(env.DB, 'INSERT INTO admins (id, email, name, picture, isActive, lastLogin, createdAt, updatedAt) VALUES (?, ?, ?, ?, 1, ?, ?, ?)', id(), email, body.name, body.picture || null, now, now, now);
-    } else {
-      await run(env.DB, 'UPDATE admins SET name = ?, picture = COALESCE(?, picture), lastLogin = ?, updatedAt = ? WHERE id = ?', body.name, body.picture || null, now, now, existing.id);
-    }
+    await run(env.DB, 'UPDATE admins SET name = ?, picture = COALESCE(?, picture), lastLogin = ?, updatedAt = ? WHERE id = ?', googleUser.name, googleUser.picture, now, now, existing.id);
     const admin = normalizeAdmin(await first(env.DB, 'SELECT * FROM admins WHERE lower(email) = ?', email));
     return ok({ ...admin, isAdmin: true }, 'Admin authenticated successfully');
   }
