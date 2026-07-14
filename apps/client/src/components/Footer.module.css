@@ -61,6 +61,24 @@
   font-size: 0.9rem;
 }
 
+.builderCredit {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.9rem;
+}
+
+.builderCredit a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration-color: rgba(242, 86, 26, 0.7);
+  text-underline-offset: 0.2em;
+  transition: color 300ms ease-in-out;
+}
+
+.builderCredit a:hover,
+.builderCredit a:focus-visible {
+  color: #f2561a;
+}
+
 @media (max-width: 768px) {
   .content {
     grid-template-columns: 1fr;

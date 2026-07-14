@@ -48,7 +48,7 @@ const DonationSection: React.FC = () => {
   };
 
   return (
-    <section ref={ref} className={`${styles.donation} section`}>
+    <section ref={ref} className={`${styles.donation} section`} id="donate">
       <div className="container">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -115,7 +115,7 @@ const DonationSection: React.FC = () => {
               whileTap={{ scale: 0.98 }}
               aria-label="שלח תרומה"
             >
-              {isLoading ? 'שליחה...' : 'תרומה מהרצי'}
+              {isLoading ? 'שליחה...' : 'שליחת תרומה'}
             </motion.button>
           </div>
 
@@ -130,7 +130,7 @@ const DonationSection: React.FC = () => {
                 <div className={styles.successContent}>
                   <span className={styles.checkmark}>✓</span>
                   <h3>תודה על התרומה!</h3>
-                  <p>התרומה שלך קיבלה במהלך השנייה</p>
+                  <p>הפנייה נקלטה בהצלחה ותסייע לנו להמשיך להיות זמינים בשטח.</p>
                 </div>
               </motion.div>
             )}

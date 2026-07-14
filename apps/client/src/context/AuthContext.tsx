@@ -48,34 +48,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (credential: string) => {
     try {
       setIsLoading(true);
-      
-      // For Google OAuth, credential is the JWT ID token
-      // Decode the JWT to extract user info
-      let email = '';
-      let name = '';
-      let picture = '';
-
-      // Try to decode JWT if it looks like a Google token
-      if (credential.includes('.') && credential.split('.').length === 3) {
-        try {
-          const payload = JSON.parse(atob(credential.split('.')[1]));
-          email = payload.email || '';
-          name = payload.name || '';
-          picture = payload.picture || '';
-        } catch {
-          // If decode fails, treat as email for mock login
-          email = credential;
-          name = credential.split('@')[0];
-          picture = '';
-        }
-      } else {
-        // Treat as email for mock login
-        email = credential;
-        name = credential.split('@')[0];
-        picture = '';
+      if (!credential || credential.split('.').length !== 3) {
+        throw new Error('Google credential is missing or invalid');
       }
-
-      console.log('Sending auth request with:', { email, name });
 
       const response = await fetch(`${API_URL}/api/auth/google-verify`, {
         method: 'POST',
@@ -83,20 +58,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          email,
-          name,
-          picture,
+          credential,
         }),
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Auth response error:', errorText);
-        throw new Error('Authentication failed');
+        const errorResult = await response.json().catch(() => null);
+        throw new Error(errorResult?.error || 'Authentication failed');
       }
 
       const result = await response.json();
-      console.log('Auth response:', result);
 
       if (result.success && result.data) {
         const userData = result.data;
@@ -108,13 +79,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Save to localStorage
         localStorage.setItem('authToken', authToken);
         localStorage.setItem('authUser', JSON.stringify(userData));
-        
-        console.log('Login successful, user:', userData);
       } else {
         throw new Error('Invalid auth response');
       }
     } catch (error) {
-      console.error('Login error:', error);
       setIsLoading(false);
       throw error;
     } finally {
