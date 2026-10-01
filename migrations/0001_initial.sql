@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS donations (
   donorName TEXT NOT NULL,
   donorEmail TEXT NOT NULL,
   message TEXT,
-  status TEXT NOT NULL DEFAULT 'completed',
+  status TEXT NOT NULL DEFAULT 'pending',
   createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

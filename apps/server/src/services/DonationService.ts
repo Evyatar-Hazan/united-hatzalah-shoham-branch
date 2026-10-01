@@ -10,14 +10,14 @@ export class DonationService {
           donorName: donationData.donorName,
           donorEmail: donationData.donorEmail,
           message: donationData.message,
-          status: 'completed',
+          status: 'pending',
         },
       });
 
       return {
         success: true,
         data: donation as Donation,
-        message: 'Donation received successfully',
+        message: 'Donation request received. No payment was processed.',
         timestamp: new Date(),
       };
     } catch (error) {
@@ -49,20 +49,23 @@ export class DonationService {
   }
 
   static async getDonationStats(): Promise<
-    ApiResponse<{ totalDonations: number; totalAmount: number }>
+    ApiResponse<{ totalRequests: number; requestedAmount: number; paymentProcessed: boolean }>
   > {
     try {
-      const donations = await prisma.donation.findMany();
-      const totalDonations = donations.length;
-      const totalAmount = donations.reduce<number>((sum, donation) => {
+      const donations = await prisma.donation.findMany({
+        where: { status: { not: 'failed' } },
+      });
+      const totalRequests = donations.length;
+      const requestedAmount = donations.reduce<number>((sum, donation) => {
         return sum + donation.amount;
       }, 0);
 
       return {
         success: true,
         data: {
-          totalDonations,
-          totalAmount,
+          totalRequests,
+          requestedAmount,
+          paymentProcessed: false,
         },
         timestamp: new Date(),
       };

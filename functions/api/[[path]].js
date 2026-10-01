@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createRemoteJWKSet, jwtVerify, SignJWT } from 'jose';
 
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -16,6 +16,9 @@ const fail = (error, status = 400) => json({ success: false, error, timestamp: n
 const id = () => crypto.randomUUID();
 const GOOGLE_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
 const GOOGLE_JWKS = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
+const SESSION_ISSUER = 'united-hatzalah-shoham-branch';
+const SESSION_AUDIENCE = 'admin-api';
+const SESSION_TTL = '1h';
 
 const parseBody = async (request) => {
   const contentType = request.headers.get('content-type') || '';
@@ -36,7 +39,7 @@ let schemaReady = false;
 
 const INIT_SQL = `
 CREATE TABLE IF NOT EXISTS donors (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, logo TEXT, createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS donations (id TEXT PRIMARY KEY, amount REAL NOT NULL, donorName TEXT NOT NULL, donorEmail TEXT NOT NULL, message TEXT, status TEXT NOT NULL DEFAULT 'completed', createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS donations (id TEXT PRIMARY KEY, amount REAL NOT NULL, donorName TEXT NOT NULL, donorEmail TEXT NOT NULL, message TEXT, status TEXT NOT NULL DEFAULT 'pending', createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS admins (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, picture TEXT, isActive INTEGER NOT NULL DEFAULT 1, lastLogin TEXT, createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS gallery_items (id TEXT PRIMARY KEY, title TEXT NOT NULL, category TEXT NOT NULL, imageUrl TEXT NOT NULL, createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS stories (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT NOT NULL, date TEXT NOT NULL, image TEXT, createdAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -76,13 +79,54 @@ const contactInfoFromRow = (row) => ({
   },
 });
 
+const getSessionKey = (env) => {
+  const secret = env.SESSION_SECRET;
+  if (typeof secret !== 'string' || secret.length < 32) return null;
+  return new TextEncoder().encode(secret);
+};
+
+const issueSessionToken = async (admin, env) => {
+  const key = getSessionKey(env);
+  if (!key) throw new Error('Admin sessions are unavailable');
+
+  return new SignJWT({ email: admin.email.toLowerCase() })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuer(SESSION_ISSUER)
+    .setAudience(SESSION_AUDIENCE)
+    .setSubject(admin.id)
+    .setJti(id())
+    .setIssuedAt()
+    .setExpirationTime(SESSION_TTL)
+    .sign(key);
+};
+
 const requireAdmin = async (request, env) => {
   const header = request.headers.get('authorization') || '';
   if (!header.startsWith('Bearer ')) return null;
-  const email = header.slice(7).trim().toLowerCase();
-  if (!email) return null;
-  const admin = await first(env.DB, 'SELECT * FROM admins WHERE lower(email) = ? AND isActive = 1', email);
-  return normalizeAdmin(admin);
+
+  const token = header.slice(7).trim();
+  const key = getSessionKey(env);
+  if (!token || !key) return null;
+
+  try {
+    const { payload } = await jwtVerify(token, key, {
+      algorithms: ['HS256'],
+      issuer: SESSION_ISSUER,
+      audience: SESSION_AUDIENCE,
+    });
+
+    if (!payload.sub || typeof payload.email !== 'string') return null;
+    const email = payload.email.toLowerCase();
+    const admin = await first(
+      env.DB,
+      'SELECT * FROM admins WHERE id = ? AND lower(email) = ? AND isActive = 1',
+      payload.sub,
+      email
+    );
+    return normalizeAdmin(admin);
+  } catch {
+    return null;
+  }
 };
 
 const verifyGoogleIdToken = async (credential, env) => {
@@ -219,14 +263,25 @@ const handlePublic = async (request, env, path) => {
       donorName: body.donorName || 'Anonymous',
       donorEmail: body.donorEmail || 'donor@example.com',
       message: body.message || null,
-      status: 'completed',
+      status: 'pending',
     });
-    return json({ success: true, data: donation, message: 'Donation received successfully', timestamp: new Date().toISOString() }, 201);
+    return json(
+      {
+        success: true,
+        data: donation,
+        message: 'Donation request received. No payment was processed.',
+        timestamp: new Date().toISOString(),
+      },
+      201
+    );
   }
 
   if (method === 'GET' && path === '/donations/stats') {
-    const stats = await first(env.DB, 'SELECT COUNT(*) as totalDonations, COALESCE(SUM(amount), 0) as totalAmount FROM donations');
-    return ok(stats);
+    const stats = await first(
+      env.DB,
+      "SELECT COUNT(*) as totalRequests, COALESCE(SUM(amount), 0) as requestedAmount FROM donations WHERE status != 'failed'"
+    );
+    return ok({ ...stats, paymentProcessed: false });
   }
 
   if (method === 'POST' && path === '/contact') {
@@ -265,13 +320,8 @@ const handlePublic = async (request, env, path) => {
     const now = new Date().toISOString();
     await run(env.DB, 'UPDATE admins SET name = ?, picture = COALESCE(?, picture), lastLogin = ?, updatedAt = ? WHERE id = ?', googleUser.name, googleUser.picture, now, now, existing.id);
     const admin = normalizeAdmin(await first(env.DB, 'SELECT * FROM admins WHERE lower(email) = ?', email));
-    return ok({ ...admin, isAdmin: true }, 'Admin authenticated successfully');
-  }
-
-  if (method === 'POST' && path === '/auth/check-admin') {
-    const body = await parseBody(request);
-    const admin = body.email ? await first(env.DB, 'SELECT id FROM admins WHERE lower(email) = ? AND isActive = 1', String(body.email).toLowerCase()) : null;
-    return ok({ isAdmin: Boolean(admin) });
+    const sessionToken = await issueSessionToken(admin, env);
+    return ok({ ...admin, isAdmin: true, sessionToken }, 'Admin authenticated successfully');
   }
 
   return null;
@@ -340,7 +390,8 @@ const handleAdmin = async (request, env, path) => {
 
   if (request.method === 'POST' && !resourceId) {
     const body = await parseBody(request);
-    return json({ success: true, data: await createRow(env, config, body), timestamp: new Date().toISOString() }, 201);
+    const createBody = resource === 'donations' ? { ...body, status: 'pending' } : body;
+    return json({ success: true, data: await createRow(env, config, createBody), timestamp: new Date().toISOString() }, 201);
   }
 
   if (request.method === 'PUT' && resourceId) {
