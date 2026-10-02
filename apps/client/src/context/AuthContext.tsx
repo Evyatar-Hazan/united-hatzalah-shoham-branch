@@ -21,6 +21,20 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
+const isUnexpiredSessionToken = (token: string) => {
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+
+  try {
+    const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const payload = JSON.parse(atob(padded));
+    return typeof payload.exp === 'number' && payload.exp * 1000 > Date.now();
+  } catch {
+    return false;
+  }
+};
+
 const getStoredAuth = (): { user: User | null; token: string | null } => {
   const savedToken = localStorage.getItem('authToken');
   const savedUser = localStorage.getItem('authUser');
@@ -30,6 +44,9 @@ const getStoredAuth = (): { user: User | null; token: string | null } => {
   }
 
   try {
+    if (!isUnexpiredSessionToken(savedToken)) {
+      throw new Error('Stored admin session is invalid');
+    }
     return { user: JSON.parse(savedUser), token: savedToken };
   } catch (error) {
     console.error('Failed to restore auth:', error);
@@ -70,14 +87,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const result = await response.json();
 
       if (result.success && result.data) {
-        const userData = result.data;
-        // Store email as token since we use it for Bearer auth
-        const authToken = userData.email;
-        setToken(authToken);
+        const { sessionToken, ...userData } = result.data;
+        if (typeof sessionToken !== 'string' || sessionToken.split('.').length !== 3) {
+          throw new Error('Invalid admin session response');
+        }
+        setToken(sessionToken);
         setUser(userData);
 
-        // Save to localStorage
-        localStorage.setItem('authToken', authToken);
+        localStorage.setItem('authToken', sessionToken);
         localStorage.setItem('authUser', JSON.stringify(userData));
       } else {
         throw new Error('Invalid auth response');
