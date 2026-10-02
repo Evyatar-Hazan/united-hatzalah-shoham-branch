@@ -105,6 +105,13 @@ const signSession = ({ secret = SESSION_SECRET, expires = '5m', email = ADMIN.em
     .setExpirationTime(expires)
     .sign(new TextEncoder().encode(secret));
 
+const tamperSignature = (token) => {
+  const [header, payload, signature] = token.split('.');
+  const bytes = Buffer.from(signature, 'base64url');
+  bytes[0] ^= 1;
+  return `${header}.${payload}.${bytes.toString('base64url')}`;
+};
+
 test('admin API rejects missing authorization and the legacy plain-email bearer', async () => {
   const db = new FakeDb();
   const missing = await callApi('/admin/admins', { env: { DB: db, SESSION_SECRET } });
@@ -121,7 +128,7 @@ test('admin API rejects tampered, expired, mismatched, and unconfigured sessions
   const db = new FakeDb();
   const valid = await signSession();
   const cases = [
-    `${valid.slice(0, -1)}${valid.endsWith('a') ? 'b' : 'a'}`,
+    tamperSignature(valid),
     await signSession({ expires: '0s' }),
     await signSession({ email: 'other@example.test' }),
   ];
