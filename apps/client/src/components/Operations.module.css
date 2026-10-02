@@ -1,0 +1,89 @@
+.operations {
+  background: #f6f7fb;
+}
+
+.header {
+  max-width: 760px;
+  margin: 0 auto 2.5rem;
+  text-align: center;
+}
+
+.eyebrow {
+  margin: 0 0 0.65rem;
+  color: #f2561a;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.title {
+  margin: 0 0 1rem;
+  color: #162033;
+  font-size: 2.3rem;
+}
+
+.description {
+  margin: 0;
+  color: #4c5567;
+  line-height: 1.8;
+  font-size: 1.05rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.5rem;
+}
+
+.card {
+  background: white;
+  border-radius: 0.9rem;
+  overflow: hidden;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.08);
+}
+
+.imageWrap {
+  aspect-ratio: 1.2 / 1;
+  overflow: hidden;
+}
+
+.imageWrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cardBody {
+  padding: 1.25rem;
+  text-align: right;
+}
+
+.meta {
+  display: inline-block;
+  margin-bottom: 0.55rem;
+  color: #f2561a;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.cardBody h3 {
+  margin: 0 0 0.65rem;
+  color: #162033;
+  font-size: 1.2rem;
+}
+
+.cardBody p {
+  margin: 0;
+  color: #505866;
+  line-height: 1.7;
+}
+
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .title {
+    font-size: 1.9rem;
+  }
+}

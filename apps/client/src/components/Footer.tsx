@@ -10,13 +10,13 @@ const Footer: React.FC = () => {
       <div className="container">
         <div className={styles.content}>
           <div className={styles.section}>
-            <h3>אודות</h3>
+            <h3>ניווט</h3>
             <ul>
               <li>
                 <a href="#about">על הסניף</a>
               </li>
               <li>
-                <a href="#team">הצוות שלנו</a>
+                <a href="#gallery">גלריה</a>
               </li>
               <li>
                 <a href="#contact">יצירת קשר</a>
@@ -25,16 +25,16 @@ const Footer: React.FC = () => {
           </div>
 
           <div className={styles.section}>
-            <h3>משפטי</h3>
+            <h3>פעילות</h3>
             <ul>
               <li>
-                <a href="/privacy">מדיניות הפרטיות</a>
+                <a href="#stories">מאחורי הפעילות</a>
               </li>
               <li>
-                <a href="/terms">תנאים וביטחון</a>
+                <a href="#donors">שותפים ותורמים</a>
               </li>
               <li>
-                <a href="/cookies">קבצי קוקיז</a>
+                <a href="#donate">תרומה לסניף</a>
               </li>
             </ul>
           </div>
@@ -43,13 +43,13 @@ const Footer: React.FC = () => {
             <h3>קהילה</h3>
             <ul>
               <li>
-                <a href="#testimonials">חוות דעות</a>
+                <a href="#gallery">תמונות מהשטח</a>
               </li>
               <li>
                 <a href="#stories">סיפורי הצלה</a>
               </li>
               <li>
-                <a href="#volunteer">הצטרף כמתנדב</a>
+                <a href="#contact">הצטרפות ויצירת קשר</a>
               </li>
             </ul>
           </div>
@@ -71,7 +71,17 @@ const Footer: React.FC = () => {
             &copy; {currentYear} סניף איחוד הצלה שוהם. כל הזכויות שמורות.
           </p>
           <p className={styles.credits}>
-            עוצב וייושם עם ❤️ לשמירה על חיים
+            נבנה כדי לשקף פעילות אמיתית, זמינות קהילתית והצלת חיים.
+          </p>
+          <p className={styles.builderCredit}>
+            נבנה באהבה על ידי{' '}
+            <a
+              href="https://evyatarhazan.com"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              evyatarhazan.com
+            </a>
           </p>
         </div>
       </div>

@@ -21,6 +21,20 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
+const isUnexpiredSessionToken = (token: string) => {
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+
+  try {
+    const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const payload = JSON.parse(atob(padded));
+    return typeof payload.exp === 'number' && payload.exp * 1000 > Date.now();
+  } catch {
+    return false;
+  }
+};
+
 const getStoredAuth = (): { user: User | null; token: string | null } => {
   const savedToken = localStorage.getItem('authToken');
   const savedUser = localStorage.getItem('authUser');
@@ -30,6 +44,9 @@ const getStoredAuth = (): { user: User | null; token: string | null } => {
   }
 
   try {
+    if (!isUnexpiredSessionToken(savedToken)) {
+      throw new Error('Stored admin session is invalid');
+    }
     return { user: JSON.parse(savedUser), token: savedToken };
   } catch (error) {
     console.error('Failed to restore auth:', error);
@@ -48,34 +65,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (credential: string) => {
     try {
       setIsLoading(true);
-      
-      // For Google OAuth, credential is the JWT ID token
-      // Decode the JWT to extract user info
-      let email = '';
-      let name = '';
-      let picture = '';
-
-      // Try to decode JWT if it looks like a Google token
-      if (credential.includes('.') && credential.split('.').length === 3) {
-        try {
-          const payload = JSON.parse(atob(credential.split('.')[1]));
-          email = payload.email || '';
-          name = payload.name || '';
-          picture = payload.picture || '';
-        } catch {
-          // If decode fails, treat as email for mock login
-          email = credential;
-          name = credential.split('@')[0];
-          picture = '';
-        }
-      } else {
-        // Treat as email for mock login
-        email = credential;
-        name = credential.split('@')[0];
-        picture = '';
+      if (!credential || credential.split('.').length !== 3) {
+        throw new Error('Google credential is missing or invalid');
       }
-
-      console.log('Sending auth request with:', { email, name });
 
       const response = await fetch(`${API_URL}/api/auth/google-verify`, {
         method: 'POST',
@@ -83,38 +75,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          email,
-          name,
-          picture,
+          credential,
         }),
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Auth response error:', errorText);
-        throw new Error('Authentication failed');
+        const errorResult = await response.json().catch(() => null);
+        throw new Error(errorResult?.error || 'Authentication failed');
       }
 
       const result = await response.json();
-      console.log('Auth response:', result);
 
       if (result.success && result.data) {
-        const userData = result.data;
-        // Store email as token since we use it for Bearer auth
-        const authToken = userData.email;
-        setToken(authToken);
+        const { sessionToken, ...userData } = result.data;
+        if (typeof sessionToken !== 'string' || sessionToken.split('.').length !== 3) {
+          throw new Error('Invalid admin session response');
+        }
+        setToken(sessionToken);
         setUser(userData);
 
-        // Save to localStorage
-        localStorage.setItem('authToken', authToken);
+        localStorage.setItem('authToken', sessionToken);
         localStorage.setItem('authUser', JSON.stringify(userData));
-        
-        console.log('Login successful, user:', userData);
       } else {
         throw new Error('Invalid auth response');
       }
     } catch (error) {
-      console.error('Login error:', error);
       setIsLoading(false);
       throw error;
     } finally {

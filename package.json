@@ -15,6 +15,7 @@
     "build:cloudflare": "npm run build:client",
     "build:client": "npm run build --workspace @united-hatzalah-shoham-branch/client",
     "build:server": "npm run build --workspace @united-hatzalah-shoham-branch/server",
+    "test": "node --test tests/*.test.mjs",
     "lint": "npm run lint --workspaces",
     "lint:client": "npm run lint --workspace @united-hatzalah-shoham-branch/client",
     "lint:server": "npm run lint --workspace @united-hatzalah-shoham-branch/server",
@@ -27,5 +28,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "jose": "^6.1.0"
   }
 }

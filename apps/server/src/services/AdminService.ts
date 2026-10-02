@@ -96,7 +96,7 @@ export class AdminService {
     name: string;
     picture?: string;
   }): Promise<ApiResponse<Admin>> {
-    return AuthService.findOrCreateAdmin(adminData.email, adminData.name, adminData.picture);
+    return AuthService.createAdmin(adminData.email, adminData.name, adminData.picture);
   }
 
   static async updateAdmin(id: string, updates: Partial<Admin>): Promise<ApiResponse<Admin>> {

@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import { Routes, Route } from 'react-router-dom';
 import Hero from './components/Hero';
 import About from './components/About';
+import Operations from './components/Operations';
 import Statistics from './components/Statistics';
 import Stories from './components/Stories';
 import Gallery from './components/Gallery';
@@ -22,6 +23,7 @@ const HomePage = () => (
   >
     <Hero />
     <About />
+    <Operations />
     <Statistics />
     <Stories />
     <Gallery />

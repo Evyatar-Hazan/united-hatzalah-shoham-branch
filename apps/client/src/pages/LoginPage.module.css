@@ -151,47 +151,6 @@
   justify-content: center;
 }
 
-.mockLoginSection {
-  margin-top: 25px;
-  padding: 20px;
-  background: #f0f7ff;
-  border: 2px dashed #2196F3;
-  border-radius: 8px;
-  animation: slideDown 0.3s ease;
-}
-
-.mockLabel {
-  color: #1976D2;
-  font-size: 0.9rem;
-  margin: 0 0 12px 0;
-  font-weight: 500;
-}
-
-.mockLoginButton {
-  width: 100%;
-  padding: 12px 24px;
-  background: #4CAF50;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  font-size: 1rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  font-family: inherit;
-}
-
-.mockLoginButton:hover:not(:disabled) {
-  background: #45a049;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
-}
-
-.mockLoginButton:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
 /* Mobile Responsive */
 @media (max-width: 768px) {
   .container {
