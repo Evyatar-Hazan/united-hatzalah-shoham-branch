@@ -11,6 +11,11 @@ The project runs on Cloudflare without a paid server:
 
 This replaces the old production dependency on an Express server plus PostgreSQL host.
 
+Branch, CI, merge, deployment, rollback, and production-evidence policy is defined in
+[ADR-0046](adr/ADR-0046-branch-ci-deployment-policy.md). The ADR records the current
+fail-closed production blockers; it does not authorize a merge, secret change,
+migration, or deployment.
+
 ## Live URLs
 
 - Current Pages URL: `https://united-hatzalah-shoham-branch.pages.dev`
