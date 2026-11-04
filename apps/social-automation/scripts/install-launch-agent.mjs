@@ -38,10 +38,10 @@ const env = [
 await writeFile(envPath, `${env}\n`, { mode: 0o600 });
 await chmod(envPath, 0o600);
 
-await writeFile(runnerPath, `#!/bin/zsh\nset -a\nsource ${JSON.stringify(envPath)}\nset +a\nexec /usr/bin/env node ${JSON.stringify(join(projectRoot, 'apps/social-automation/src/worker.mjs'))}\n`, { mode: 0o700 });
+await writeFile(runnerPath, `#!/bin/zsh\nset -a\nsource ${JSON.stringify(envPath)}\nset +a\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(projectRoot, 'apps/social-automation/src/worker.mjs'))}\n`, { mode: 0o700 });
 await chmod(runnerPath, 0o700);
 
-await writeFile(hookRunnerPath, `#!/bin/zsh\nset -a\nsource ${JSON.stringify(envPath)}\nset +a\nexec /usr/bin/env node ${JSON.stringify(join(projectRoot, 'apps/social-automation/scripts/hermes-ingest-hook.mjs'))}\n`, { mode: 0o700 });
+await writeFile(hookRunnerPath, `#!/bin/zsh\nset -a\nsource ${JSON.stringify(envPath)}\nset +a\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(join(projectRoot, 'apps/social-automation/scripts/hermes-ingest-hook.mjs'))}\n`, { mode: 0o700 });
 await chmod(hookRunnerPath, 0o700);
 
 const plist = `<?xml version="1.0" encoding="UTF-8"?>
