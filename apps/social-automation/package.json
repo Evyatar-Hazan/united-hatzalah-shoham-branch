@@ -1,0 +1,19 @@
+{
+  "name": "@united-hatzalah-shoham-branch/social-automation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "social": "node src/cli.mjs",
+    "worker": "node src/worker.mjs",
+    "dry-run": "node scripts/dry-run.mjs",
+    "install:launch-agent": "node scripts/install-launch-agent.mjs",
+    "build": "node --check src/cli.mjs && node --check src/worker.mjs",
+    "lint": "node --check src/cli.mjs && node --check src/engine.mjs && node --check src/worker.mjs",
+    "format": "node scripts/format-check.mjs",
+    "test": "node --test"
+  }
+}
