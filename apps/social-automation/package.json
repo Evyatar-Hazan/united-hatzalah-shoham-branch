@@ -10,10 +10,15 @@
     "social": "node src/cli.mjs",
     "worker": "node src/worker.mjs",
     "dry-run": "node scripts/dry-run.mjs",
+    "browser:login": "node scripts/browser-session.mjs login",
+    "browser:verify": "node scripts/browser-session.mjs verify",
     "install:launch-agent": "node scripts/install-launch-agent.mjs",
-    "build": "node --check src/cli.mjs && node --check src/worker.mjs",
-    "lint": "node --check src/cli.mjs && node --check src/engine.mjs && node --check src/worker.mjs",
+    "build": "node --check src/cli.mjs && node --check src/worker.mjs && node --check scripts/browser-session.mjs",
+    "lint": "node --check src/cli.mjs && node --check src/engine.mjs && node --check src/worker.mjs && node --check src/browser-profile.mjs && node --check scripts/browser-session.mjs",
     "format": "node scripts/format-check.mjs",
     "test": "node --test"
+  },
+  "dependencies": {
+    "playwright-core": "^1.64.1"
   }
 }

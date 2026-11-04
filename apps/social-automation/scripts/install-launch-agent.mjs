@@ -33,6 +33,9 @@ const env = [
   'export SOCIAL_DRY_RUN="true"',
   'export SOCIAL_WHATSAPP_DRY_RUN="true"',
   'export SOCIAL_META_DRY_RUN="true"',
+  `export SOCIAL_BROWSER_PROFILE_DIR=${JSON.stringify(join(appDir, 'browser-profile'))}`,
+  'export SOCIAL_META_BUSINESS_ID="1529945614496132"',
+  'export SOCIAL_META_PAGE_ID="113365775203359"',
   'export SOCIAL_POLL_INTERVAL_MS="5000"',
 ].join('\n');
 await writeFile(envPath, `${env}\n`, { mode: 0o600 });
