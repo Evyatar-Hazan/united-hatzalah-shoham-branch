@@ -18,6 +18,7 @@ const appDir = join(homedir(), 'Library/Application Support/ShohamSocial');
 const logsDir = join(appDir, 'logs');
 const envPath = join(appDir, 'runtime.env');
 const runnerPath = join(appDir, 'run-worker.sh');
+const hookRunnerPath = join(appDir, 'run-hook.sh');
 const plistPath = join(homedir(), 'Library/LaunchAgents/org.ihud-shoham.social-automation.plist');
 await mkdir(logsDir, { recursive: true, mode: 0o700 });
 await mkdir(dirname(plistPath), { recursive: true });
@@ -40,6 +41,9 @@ await chmod(envPath, 0o600);
 await writeFile(runnerPath, `#!/bin/zsh\nset -a\nsource ${JSON.stringify(envPath)}\nset +a\nexec /usr/bin/env node ${JSON.stringify(join(projectRoot, 'apps/social-automation/src/worker.mjs'))}\n`, { mode: 0o700 });
 await chmod(runnerPath, 0o700);
 
+await writeFile(hookRunnerPath, `#!/bin/zsh\nset -a\nsource ${JSON.stringify(envPath)}\nset +a\nexec /usr/bin/env node ${JSON.stringify(join(projectRoot, 'apps/social-automation/scripts/hermes-ingest-hook.mjs'))}\n`, { mode: 0o700 });
+await chmod(hookRunnerPath, 0o700);
+
 const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -58,4 +62,4 @@ const domain = `gui/${process.getuid()}`;
 spawnSync('launchctl', ['bootout', domain, plistPath], { stdio: 'ignore' });
 const loaded = spawnSync('launchctl', ['bootstrap', domain, plistPath], { encoding: 'utf8' });
 if (loaded.status !== 0) throw new Error(loaded.stderr || 'launchctl bootstrap failed');
-console.log(JSON.stringify({ installed: true, label: 'org.ihud-shoham.social-automation', dryRun: true, plistPath }, null, 2));
+console.log(JSON.stringify({ installed: true, label: 'org.ihud-shoham.social-automation', dryRun: true, plistPath, hookRunnerPath }, null, 2));
