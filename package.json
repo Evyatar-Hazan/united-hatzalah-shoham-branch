@@ -6,11 +6,15 @@
   "type": "module",
   "workspaces": [
     "apps/client",
-    "apps/server"
+    "apps/server",
+    "apps/social-automation"
   ],
   "scripts": {
     "dev:client": "npm run dev --workspace @united-hatzalah-shoham-branch/client",
     "dev:server": "npm run dev --workspace @united-hatzalah-shoham-branch/server",
+    "social": "npm run social --workspace @united-hatzalah-shoham-branch/social-automation --",
+    "social:test": "npm test --workspace @united-hatzalah-shoham-branch/social-automation",
+    "social:worker": "npm run worker --workspace @united-hatzalah-shoham-branch/social-automation",
     "build": "npm run build --workspaces",
     "build:cloudflare": "npm run build:client",
     "build:client": "npm run build --workspace @united-hatzalah-shoham-branch/client",
