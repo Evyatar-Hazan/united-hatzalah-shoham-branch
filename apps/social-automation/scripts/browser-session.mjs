@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 import { loadConfig } from '../src/config.mjs';
-import { classifySession, launchSocialBrowser, socialUrls } from '../src/browser-profile.mjs';
+import { classifySession, connectSocialBrowser, openLoginBrowser, socialUrls } from '../src/browser-profile.mjs';
 
 const mode = process.argv[2] || 'login';
 if (!['login', 'verify'].includes(mode)) throw new Error('usage: browser-session.mjs login|verify');
 
 const config = loadConfig();
 const urls = socialUrls(config);
-const context = await launchSocialBrowser(config, { headless: false });
 
-async function inspect(name, url) {
+async function inspect(context, name, url) {
   const page = await context.newPage();
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForTimeout(2500);
@@ -22,21 +21,20 @@ async function inspect(name, url) {
 }
 
 if (mode === 'verify') {
+  const connection = await connectSocialBrowser(config, { headless: false });
   const results = [];
-  for (const [name, url] of Object.entries(urls)) results.push(await inspect(name, url));
+  for (const [name, url] of Object.entries(urls)) results.push(await inspect(connection.context, name, url));
   console.log(JSON.stringify({ profile: config.browserProfileDir, results }, null, 2));
-  await context.close();
+  await connection.close();
 } else {
-  for (const url of Object.values(urls)) {
-    const page = await context.newPage();
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(() => {});
-  }
-  const pages = context.pages();
-  if (pages[0] && pages.length > 2) await pages[0].close().catch(() => {});
+  const child = openLoginBrowser(config, Object.values(urls));
   console.log(JSON.stringify({
     ready: true,
     profile: config.browserProfileDir,
-    instruction: 'Log in to Meta and ihud.shoham@gmail.com, then close the browser window.',
+    instruction: 'Regular Chrome opened without automation. Log in to Meta and ihud.shoham@gmail.com, then close the browser window.',
   }, null, 2));
-  await new Promise((resolve) => context.once('close', resolve));
+  await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code) => code === 0 || code === null ? resolve() : reject(new Error(`Chrome exited ${code}`)));
+  });
 }

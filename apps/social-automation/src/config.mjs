@@ -10,6 +10,8 @@ export function loadConfig(env = process.env) {
     dbPath: join(dataDir, 'social.db'),
     mediaDir: join(dataDir, 'media'),
     browserProfileDir: resolve(expandHome(env.SOCIAL_BROWSER_PROFILE_DIR || join(dataDir, 'browser-profile'))),
+    chromeExecutable: expandHome(env.SOCIAL_CHROME_EXECUTABLE || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'),
+    chromeDebugPort: Number(env.SOCIAL_CHROME_DEBUG_PORT || 9237),
     metaBusinessId: env.SOCIAL_META_BUSINESS_ID || '',
     metaPageId: env.SOCIAL_META_PAGE_ID || '',
     groupId: env.SOCIAL_GROUP_ID || '',

@@ -34,4 +34,4 @@ npm run browser:login --workspace @united-hatzalah-shoham-branch/social-automati
 npm run browser:verify --workspace @united-hatzalah-shoham-branch/social-automation
 ```
 
-The login command opens Meta Business Suite and Google Photos. Log in once and close the entire browser window. Verification reports only whether each session is present; it does not publish or download media.
+The login command opens ordinary Chrome without Playwright or remote-debugging flags, so Google receives a normal browser login. Log in once and close the entire browser window. Verification then reopens the same private profile and attaches locally through Chrome DevTools; it reports only whether each session is present and does not publish or download media.
