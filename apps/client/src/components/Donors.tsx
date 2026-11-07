@@ -69,7 +69,7 @@ const Donors: React.FC = () => {
   }
 
   return (
-    <section ref={ref} className={`${styles.donors} section`}>
+    <section ref={ref} className={`${styles.donors} section`} id="donors">
       <div className="container">
         <h2 className={styles.title}>תורמים וחסויות</h2>
         <motion.div

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { AuthService } from '../services/AuthService';
+import { AuthTokenService } from '../services/AuthTokenService';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -24,17 +25,29 @@ export const authMiddleware = async (req: AuthRequest, res: Response, next: Next
       return;
     }
 
-    // Refactored: Treat the bearer token as the admin email
-    const email = authHeader.substring(7).trim();
-    const adminsRes = await AuthService.getAdmins();
-
-    if (!adminsRes.success || !adminsRes.data) {
-      res.status(500).json(adminsRes);
+    const session = await AuthTokenService.verifyAdminSession(authHeader.substring(7).trim());
+    if (!session) {
+      res.status(403).json({
+        success: false,
+        error: 'Unauthorized or not an admin',
+        timestamp: new Date(),
+      });
       return;
     }
 
-    const admin = adminsRes.data.find(a => a.email === email);
-    if (!admin) {
+    const adminRes = await AuthService.getAdminById(session.adminId);
+
+    if (!adminRes.success || !adminRes.data) {
+      res.status(403).json({
+        success: false,
+        error: 'Unauthorized or not an admin',
+        timestamp: new Date(),
+      });
+      return;
+    }
+
+    const admin = adminRes.data;
+    if (!admin.isActive || admin.email.toLowerCase() !== session.email) {
       res.status(403).json({
         success: false,
         error: 'Unauthorized or not an admin',

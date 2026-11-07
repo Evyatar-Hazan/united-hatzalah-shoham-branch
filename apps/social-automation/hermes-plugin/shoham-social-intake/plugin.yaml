@@ -1,0 +1,5 @@
+name: shoham-social-intake
+version: 1.0.0
+description: "Fail-closed Shoham social intake through the local deterministic workflow."
+author: Evyatar Hazan
+kind: standalone

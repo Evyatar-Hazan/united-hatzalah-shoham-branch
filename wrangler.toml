@@ -2,6 +2,9 @@ name = "united-hatzalah-shoham-branch"
 compatibility_date = "2026-06-24"
 pages_build_output_dir = "apps/client/dist"
 
+[vars]
+GOOGLE_CLIENT_ID = "1098412538873-i87kcpnivs1h58113tahv0koq3vnknco.apps.googleusercontent.com"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "united-hatzalah-shoham-branch"

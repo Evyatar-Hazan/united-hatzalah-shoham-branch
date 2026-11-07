@@ -47,6 +47,8 @@ The Pages Function also performs a safe schema bootstrap with `CREATE TABLE IF N
 
 ## Local Cloudflare Runtime
 
+Create a local, ignored `.dev.vars` file with a unique `SESSION_SECRET` of at least 32 characters. Do not commit that value.
+
 ```bash
 npm install
 npm run pages:dev
@@ -79,7 +81,15 @@ CLOUDFLARE_ACCOUNT_ID
 CLOUDFLARE_API_TOKEN
 ```
 
-`CLOUDFLARE_ACCOUNT_ID` has been set in GitHub. `CLOUDFLARE_API_TOKEN` still needs to be added. Create a Cloudflare API token with at least:
+Required Cloudflare Pages runtime secret:
+
+```text
+SESSION_SECRET
+```
+
+Provision and verify that secret only through an approved production change. After verification, set the non-secret GitHub repository variable `SESSION_SECRET_CONFIGURED=true`; the deployment workflow fails closed until that readiness flag exists. The secret itself must not be stored in GitHub variables, `wrangler.toml`, or the repository.
+
+Verify the current GitHub secret state before deployment. The Cloudflare API token needs at least:
 
 - Account: Cloudflare Pages: Edit
 - Account: D1: Edit
@@ -88,4 +98,4 @@ If the same token should also create/fix DNS records, add:
 
 - Zone: DNS: Edit for `evyatarhazan.com`
 
-After the token is added, every push to `main` will build, apply D1 migrations, and deploy to Cloudflare Pages.
+After the token and Pages session secret are verified, every push to `main` will build, apply D1 migrations, and deploy to Cloudflare Pages.

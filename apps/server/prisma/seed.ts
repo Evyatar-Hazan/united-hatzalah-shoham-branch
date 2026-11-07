@@ -52,25 +52,25 @@ async function main() {
   const stories = await prisma.story.createMany({
     data: [
       {
-        title: 'אברהם חוסה מתאונה קשה',
+        title: 'שומרים על כשירות בכל רגע',
         description:
-          'אברהם פגע בתאונת דרכים בחזקה. מתנדבינו הגיעו תוך 3 דקות וניתנו לו עזרה ראשונה מיידית שחסכה לו חיים.',
-        date: '2025-01-20',
-        image: null,
+          'הסניף משקיע באופן שוטף באימוני החייאה, ציוד ותרחישי אמת כדי שכל מתנדב יגיע מוכן לדקות הקריטיות ביותר.',
+        date: '2026-07-14',
+        image: '/images/shoham/hero-training.jpg',
       },
       {
-        title: 'הצלת פעוט שנחנק',
+        title: 'נוכחות קהילתית שמחזקת ביטחון',
         description:
-          'ילדה בת 2 שנחנקה על פי כלב. מתנדבינו שלנו שהיו קרובים למקום הגיעו ברגעי זהב וחילצו את הילדה בבטחה.',
-        date: '2025-01-15',
-        image: null,
+          'בין קריאה לקריאה, מתנדבי הסניף נמצאים בשטח, באירועים ובמפגשי קהילה כדי להיות קרובים לתושבים גם בשגרה.',
+        date: '2026-07-14',
+        image: '/images/shoham/volunteers-standby.jpg',
       },
       {
-        title: 'התנדבות סדנת עזרה ראשונה',
+        title: 'ציוד, שותפים ואנשים טובים',
         description:
-          'סדנה מעשית שבה הכשרנו 50 תושבים חדשים בעזרה ראשונה וטיפול בחירום. כל אחד חוסך חיים!',
-        date: '2025-01-10',
-        image: null,
+          'תרומות ושותפויות מקומיות מאפשרות לסניף להרחיב ציוד, לייעל תגובה ולשמור על רמת מוכנות מבצעית גבוהה.',
+        date: '2026-07-14',
+        image: '/images/shoham/equipment-donation.jpg',
       },
     ],
   });
@@ -80,24 +80,34 @@ async function main() {
   const galleryItems = await prisma.galleryItem.createMany({
     data: [
       {
-        title: 'סדנת הכשרה מתנדבים',
+        title: 'תרגול רפואת חירום והחייאה',
         category: 'הכשרה',
-        imageUrl: 'https://via.placeholder.com/400x300?text=Training+Workshop',
+        imageUrl: '/images/shoham/hero-training.jpg',
       },
       {
-        title: 'רכב צילום מפעם הופעות',
+        title: 'נוכחות מתנדבים באירועי קהילה',
+        category: 'קהילה',
+        imageUrl: '/images/shoham/volunteers-standby.jpg',
+      },
+      {
+        title: 'ערב הוקרה לפעילי הסניף',
+        category: 'קהילה',
+        imageUrl: '/images/shoham/community-evening.jpg',
+      },
+      {
+        title: 'מפגש צוות והיערכות מבצעית',
         category: 'מתנדבים',
-        imageUrl: 'https://via.placeholder.com/400x300?text=Volunteer+Team',
+        imageUrl: '/images/shoham/community-table.jpg',
       },
       {
-        title: 'אירוע ערב התנדבות',
-        category: 'אירוע',
-        imageUrl: 'https://via.placeholder.com/400x300?text=Volunteer+Event',
-      },
-      {
-        title: 'ציוד רפואי של היחידה',
+        title: 'ציוד שנתרם לפעילות הסניף',
         category: 'ציוד',
-        imageUrl: 'https://via.placeholder.com/400x300?text=Medical+Equipment',
+        imageUrl: '/images/shoham/equipment-donation.jpg',
+      },
+      {
+        title: 'אמבולנס הקהילה בפעילות חינוכית',
+        category: 'הסברה',
+        imageUrl: '/images/shoham/ambulance-mascot.jpg',
       },
     ],
   });
