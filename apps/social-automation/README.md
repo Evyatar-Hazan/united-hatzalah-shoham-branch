@@ -23,9 +23,21 @@ npm run social:test
 
 Hermes calls `ingest` for each message in the configured group. The launch agent runs `worker` while the Mac is logged in. On restart, pending jobs and outbox messages resume from SQLite.
 
-Live mode requires both `SOCIAL_DRY_RUN=false` and a verified `SOCIAL_META_PUBLISH_COMMAND`. The publisher must read JSON from stdin and return JSON containing a live `url`; otherwise the publication is not marked successful.
+Live mode requires `SOCIAL_DRY_RUN=false`, `SOCIAL_META_DRY_RUN=false`, an exact approved draft fingerprint, and either the connected local Chrome bridge or a verified `SOCIAL_META_PUBLISH_COMMAND`. A publication is never marked successful without a verified live URL.
 
-## Dedicated browser profile
+## Existing Shoham Chrome profile
+
+The live browser adapter is a local unpacked Chrome extension installed only in the `סניף שוהם והמושבים` profile. It polls a token-protected loopback bridge on `127.0.0.1`; no password or browser cookie is copied to the repository, database, or vault.
+
+```bash
+npm run browser:extension:prepare --workspace @united-hatzalah-shoham-branch/social-automation
+npm run browser:extension:check --workspace @united-hatzalah-shoham-branch/social-automation
+npm run browser:dry-run --workspace @united-hatzalah-shoham-branch/social-automation
+```
+
+The generated extension lives under the private application data directory. Chrome requires a one-time human confirmation to load it as an unpacked extension. The automation always prepares and cancels dry-run composers; the Publish button is reachable only from an approved immutable draft fingerprint.
+
+## Legacy dedicated browser profile
 
 The Meta and Google sessions live in a private Chrome profile under the local application directory. Passwords and cookies are never copied into the repository, SQLite database, or vault.
 

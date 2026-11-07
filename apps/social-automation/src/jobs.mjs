@@ -1,6 +1,19 @@
 import { spawn } from 'node:child_process';
 import { nowIso } from './database.mjs';
-import { draftFromBrief } from './text.mjs';
+import { generateCopy } from './content-generator.mjs';
+import { prepareMediaVariants } from './media-processor.mjs';
+
+export const APPROVED_ALBUMS = [
+  'תמונות כלליות סניף שוהם והמושבים',
+  'קורס חובשים מס2 שתיים שוהם',
+  'טקס סיום קורס חובשים 2 שוהם 2026',
+  'תמונות מזירות אירוע סניף שוהם',
+  'תמונות לפרסום איחוד שוהם והמושבים',
+  'קורס חובשים מס2 שוהם',
+  'תמונות קורס 444 שוהם',
+  'ועידת ראשי סניפים 8.1.25 👍',
+];
+export const EXCLUDED_ALBUMS = ['רגעים של אור (יומיים אחרונים במחנה חנוכה)'];
 
 function runCommand(command, input) {
   return new Promise((resolve, reject) => {
@@ -27,7 +40,7 @@ function chooseMedia(db, now) {
     WHERE last_used_at IS NULL OR last_used_at<? ORDER BY COALESCE(last_used_at,'') ASC LIMIT 1`).get(cutoff);
 }
 
-function runMorningJob(db, job, now) {
+async function runMorningJob(db, config, job, now) {
   const media = chooseMedia(db, now);
   if (!media) {
     queueOutbox(db, `${job.job_key}:missing-media`, 'לא מצאתי כרגע נכס מדיה מסונכרן מהמקורות המאושרים. אמשיך לבדוק; אם תרצו פוסט מסוים, שלחו כאן תמונה וטקסט.', now);
@@ -40,7 +53,7 @@ function runMorningJob(db, job, now) {
     VALUES(?,'awaiting_approval','morning',?,?,?,?,?)`)
     .run(publicId, brief, JSON.stringify([{ key: media.media_key, path: JSON.parse(media.metadata_json).path || null }]), nowIso(now), nowIso(now), new Date(now.getTime() + 72 * 60 * 60 * 1000).toISOString());
   const postId = Number(postResult.lastInsertRowid);
-  const copy = draftFromBrief('הבוקר אנחנו מזכירים שהמוכנות שלנו מתחילה באנשים, באימונים ובציוד שמחכה לרגע האמת.');
+  const copy = await generateCopy(config, 'הבוקר אנחנו מזכירים שהמוכנות שלנו מתחילה באנשים, באימונים ובציוד שמחכה לרגע האמת.');
   const draftResult = db.prepare(`INSERT INTO drafts
     (post_id,version,facebook_text,instagram_text,media_json,fingerprint,status,created_at)
     VALUES(?,1,?,?,?,?,'pending',?)`)
@@ -48,6 +61,24 @@ function runMorningJob(db, job, now) {
   const draftId = Number(draftResult.lastInsertRowid);
   queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}\n\nלאישור השיבו ישירות: מאשר / מאשר לפייסבוק / מאשר לאינסטגרם`, now, 'draft', draftId);
   return { status: 'done' };
+}
+
+async function runMediaSyncJob(db, config, services, job, now) {
+  if (!services.browserBridge) return { status: 'failed', error: 'browser_bridge_unavailable' };
+  const result = await services.browserBridge.request('syncGooglePhotos', {
+    approvedAlbums: APPROVED_ALBUMS,
+    excludedAlbums: EXCLUDED_ALBUMS,
+  }, { timeoutMs: 180_000 });
+  let imported = 0;
+  for (const item of result.imported || []) {
+    if (String(item.source || '').includes(EXCLUDED_ALBUMS[0])) continue;
+    const prepared = await prepareMediaVariants(config, { path: item.path, source: item.source, album: item.album }, item.key);
+    db.prepare(`INSERT INTO media_usage(media_key,source,metadata_json)
+      VALUES(?,?,?) ON CONFLICT(media_key) DO UPDATE SET source=excluded.source, metadata_json=excluded.metadata_json`)
+      .run(item.key, item.source || `google-photos:${item.album}`, JSON.stringify(prepared));
+    imported += 1;
+  }
+  return { status: imported ? 'done' : 'failed', error: imported ? null : 'no_approved_media_imported' };
 }
 
 function runWeeklyReport(db, job, now) {
@@ -59,7 +90,7 @@ function runWeeklyReport(db, job, now) {
   return { status: 'done' };
 }
 
-async function runPublishJob(db, config, job, payload, now) {
+async function runPublishJob(db, config, services, job, payload, now) {
   const publication = db.prepare('SELECT * FROM publications WHERE draft_id=? AND channel=?').get(payload.draftId, payload.channel);
   if (!publication || publication.status === 'published') return { status: 'done' };
   const draft = db.prepare('SELECT * FROM drafts WHERE id=?').get(payload.draftId);
@@ -69,10 +100,24 @@ async function runPublishJob(db, config, job, payload, now) {
     queueOutbox(db, `${job.job_key}:dry-run`, `בדיקת dry-run הושלמה עבור ${payload.channel}. לא בוצע פרסום חיצוני.`, now);
     return { status: 'done' };
   }
-  if (!config.metaPublishCommand) return { status: 'failed', error: 'meta_publish_command_missing' };
   const text = payload.channel === 'facebook' ? draft.facebook_text : draft.instagram_text;
-  const output = await runCommand(config.metaPublishCommand, { channel: payload.channel, text, media: JSON.parse(draft.media_json), draftId: draft.id });
-  const receipt = output ? JSON.parse(output) : {};
+  let receipt;
+  if (config.metaPublishCommand) {
+    const output = await runCommand(config.metaPublishCommand, { channel: payload.channel, text, media: JSON.parse(draft.media_json), draftId: draft.id });
+    receipt = output ? JSON.parse(output) : {};
+  } else if (services.browserBridge) {
+    receipt = await services.browserBridge.request('publishMeta', {
+      channel: payload.channel,
+      text,
+      media: JSON.parse(draft.media_json),
+      draftId: draft.id,
+      businessId: config.metaBusinessId,
+      pageId: config.metaPageId,
+      approvalFingerprint: draft.fingerprint,
+    }, { timeoutMs: 120_000 });
+  } else {
+    return { status: 'failed', error: 'meta_publisher_unavailable' };
+  }
   if (!receipt.url) throw new Error('publisher did not return a verified URL');
   db.prepare("UPDATE publications SET status='published', attempts=attempts+1, external_id=?, url=?, last_error=NULL, updated_at=? WHERE id=?")
     .run(receipt.id || null, receipt.url, nowIso(now), publication.id);
@@ -80,7 +125,7 @@ async function runPublishJob(db, config, job, payload, now) {
   return { status: 'done' };
 }
 
-export async function processJobs(db, config, now = new Date(), limit = 20) {
+export async function processJobs(db, config, now = new Date(), limit = 20, services = {}) {
   const jobs = db.prepare("SELECT * FROM jobs WHERE status IN ('pending','failed') AND run_after<=? AND attempts<3 ORDER BY id LIMIT ?").all(nowIso(now), limit);
   const results = [];
   for (const job of jobs) {
@@ -88,9 +133,10 @@ export async function processJobs(db, config, now = new Date(), limit = 20) {
     try {
       const payload = JSON.parse(job.payload_json);
       let result;
-      if (job.kind === 'morning_proposal') result = runMorningJob(db, job, now);
+      if (job.kind === 'morning_proposal') result = await runMorningJob(db, config, job, now);
+      else if (job.kind === 'media_sync') result = await runMediaSyncJob(db, config, services, job, now);
       else if (job.kind === 'weekly_report') result = runWeeklyReport(db, job, now);
-      else if (job.kind === 'publish') result = await runPublishJob(db, config, job, payload, now);
+      else if (job.kind === 'publish') result = await runPublishJob(db, config, services, job, payload, now);
       else result = { status: 'failed', error: 'unknown_job_kind' };
       db.prepare('UPDATE jobs SET status=?, last_error=?, updated_at=? WHERE id=?')
         .run(result.status, result.error || null, nowIso(now), job.id);

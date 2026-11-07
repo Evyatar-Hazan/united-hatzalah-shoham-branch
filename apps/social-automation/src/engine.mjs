@@ -169,6 +169,11 @@ export function scheduleDueWork(db, now = new Date()) {
   const minutes = Number(parts.hour) * 60 + Number(parts.minute);
   const workday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'].includes(weekday);
   const pendingMorning = db.prepare("SELECT 1 FROM posts WHERE source_kind='morning' AND status='awaiting_approval' LIMIT 1").get();
+  if (workday && minutes >= 490) {
+    const syncKey = `media-sync:${date}`;
+    db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
+      VALUES(?,'media_sync','{}','pending',?,?,?)`).run(syncKey, nowIso(now), nowIso(now), nowIso(now));
+  }
   if (workday && minutes >= 510 && !pendingMorning) {
     const key = `morning:${date}`;
     db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)

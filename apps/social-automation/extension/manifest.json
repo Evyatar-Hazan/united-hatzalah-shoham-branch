@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Shoham Social Local Bridge",
+  "version": "0.1.0",
+  "description": "Local-only bridge for the approved Shoham social workflow.",
+  "permissions": ["tabs", "scripting", "storage", "alarms"],
+  "host_permissions": [
+    "http://127.0.0.1:9238/*",
+    "https://photos.google.com/*",
+    "https://business.facebook.com/*",
+    "https://www.facebook.com/*",
+    "https://*.googleusercontent.com/*"
+  ],
+  "background": { "service_worker": "service-worker.js", "type": "module" },
+  "action": { "default_title": "Shoham Social Local Bridge" }
+}
