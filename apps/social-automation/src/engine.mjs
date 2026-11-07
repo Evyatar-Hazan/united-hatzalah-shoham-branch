@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendSignature, draftFromBrief, extractCommand, fingerprint, normalize } from './text.mjs';
 import { getSetting, nowIso, setSetting } from './database.mjs';
+import { isRevisionText } from './intent.mjs';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -32,10 +33,6 @@ function activeDrafts(db) {
     FROM drafts d JOIN posts p ON p.id=d.post_id
     WHERE d.status='pending' AND p.status='awaiting_approval'
     ORDER BY p.updated_at DESC`).all();
-}
-
-function isRevisionRequest(text) {
-  return /(תחליף|החלף|שנה|תקן|תוסיף|הוסף|תסיר|הסר|שלח\s+(?:אותה|אותו|את\s+הסקיצה)|תמונה|אימוג['׳]?י|לב\s+כתום|🧡)/i.test(normalize(text));
 }
 
 function wantsImageReplacement(text) {
@@ -186,7 +183,7 @@ export function ingestEvent(db, config, event, now = new Date()) {
 
   const command = extractCommand(event.text);
   let draft = findDraftByReply(db, event.replyToId, event.replyToText);
-  const revision = command.type === 'content' && isRevisionRequest(event.text);
+  const revision = command.type === 'content' && isRevisionText(event.text);
   if (!draft && revision) {
     const active = activeDrafts(db);
     if (active.length === 1) draft = active[0];

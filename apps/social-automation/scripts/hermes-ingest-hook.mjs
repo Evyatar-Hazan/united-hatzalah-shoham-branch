@@ -5,6 +5,7 @@ import { ingestEvent } from '../src/engine.mjs';
 import { enhanceDraft } from '../src/content-generator.mjs';
 import { prepareMediaVariants } from '../src/media-processor.mjs';
 import { flushOutbox } from '../src/outbox.mjs';
+import { classifySocialIntent } from '../src/intent.mjs';
 
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
@@ -18,6 +19,11 @@ try {
   const reply = message.match(/^\[Replying to (?:your previous message|): "([\s\S]*?)"\]\s*/);
   const text = reply ? message.slice(reply[0].length) : message;
   const rawMedia = [...message.matchAll(/(?:Image|Document|Video|Audio)[^\n]*?path:\s*`?([^`\n]+)`?/gi)].map((match) => ({ path: match[1].trim(), source: 'whatsapp' }));
+  const intent = classifySocialIntent({ text, media: rawMedia, replyToIsOwn: Boolean(extra.reply_to_is_own || reply?.[0]?.includes('your previous message')) });
+  if (intent.action === 'silence') {
+    console.log(JSON.stringify({ context: `Shoham social workflow ignored ordinary group conversation (${intent.reason}). Reply exactly NO_REPLY.` }));
+    process.exit(0);
+  }
   const db = openDatabase(config);
   const media = [];
   for (const [index, item] of rawMedia.entries()) {
