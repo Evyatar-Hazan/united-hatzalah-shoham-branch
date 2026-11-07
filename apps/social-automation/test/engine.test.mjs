@@ -46,6 +46,69 @@ test('approval without a direct reply asks for clarification', () => {
   } finally { f.close(); }
 });
 
+test('a targeted revision applies to the only active draft without a direct reply', () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [{ key: 'old', path: '/old.jpg' }] });
+    const first = f.db.prepare("SELECT * FROM drafts WHERE status='pending'").get();
+    const result = ingestEvent(f.db, f.config, { id: 'm2', chatId: 'group@g.us', senderId: 'u2', text: 'תקן את האימוג׳י ללב כתום' });
+    assert.equal(result.type, 'draft_revised');
+    const revised = f.db.prepare("SELECT * FROM drafts WHERE status='pending'").get();
+    assert.equal(revised.version, 2);
+    assert.match(revised.facebook_text, /🧡/);
+    assert.doesNotMatch(revised.facebook_text, /💚/);
+    assert.equal(revised.media_json, first.media_json);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM posts').get().count, 1);
+  } finally { f.close(); }
+});
+
+test('image replacement chooses a different approved asset and keeps the existing copy', () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [{ key: 'old', path: '/old.jpg' }] });
+    const first = f.db.prepare("SELECT * FROM drafts WHERE status='pending'").get();
+    f.db.prepare('INSERT INTO media_usage(media_key,source,metadata_json) VALUES(?,?,?)')
+      .run('new', 'approved', JSON.stringify({ path: '/new.jpg', album: 'approved' }));
+    const result = ingestEvent(f.db, f.config, { id: 'm2', chatId: 'group@g.us', senderId: 'u2', text: 'תחליף תמונה למשהו יותר מתאים' });
+    assert.equal(result.type, 'draft_revised');
+    const revised = f.db.prepare("SELECT * FROM drafts WHERE status='pending'").get();
+    assert.equal(JSON.parse(revised.media_json)[0].key, 'new');
+    assert.equal(revised.facebook_text, first.facebook_text);
+  } finally { f.close(); }
+});
+
+test('resend instruction reuses the current draft and attaches its media', () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [{ key: 'photo', path: '/photo.jpg' }] });
+    const result = ingestEvent(f.db, f.config, { id: 'm2', chatId: 'group@g.us', senderId: 'u2', text: 'שלח אותה פה' });
+    assert.equal(result.type, 'draft_resent');
+    const resend = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key='resend:m2'").get();
+    assert.equal(resend.media_path, '/photo.jpg');
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM drafts').get().count, 1);
+  } finally { f.close(); }
+});
+
+test('revision with multiple active drafts asks which draft to change', () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'פוסט ראשון' });
+    ingestEvent(f.db, f.config, { id: 'm2', chatId: 'group@g.us', senderId: 'u1', text: 'פוסט שני' });
+    const result = ingestEvent(f.db, f.config, { id: 'm3', chatId: 'group@g.us', senderId: 'u2', text: 'תחליף תמונה' });
+    assert.equal(result.type, 'clarification_required');
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM posts').get().count, 2);
+  } finally { f.close(); }
+});
+
+test('revision without an active draft asks for context instead of creating a post', () => {
+  const f = fixture();
+  try {
+    const result = ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u2', text: 'תחליף תמונה' });
+    assert.equal(result.type, 'clarification_required');
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM posts').get().count, 0);
+  } finally { f.close(); }
+});
+
 test('only owner can stop the system', () => {
   const f = fixture();
   try {

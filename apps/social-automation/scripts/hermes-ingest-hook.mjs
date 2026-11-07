@@ -4,6 +4,7 @@ import { loadConfig } from '../src/config.mjs';
 import { ingestEvent } from '../src/engine.mjs';
 import { enhanceDraft } from '../src/content-generator.mjs';
 import { prepareMediaVariants } from '../src/media-processor.mjs';
+import { flushOutbox } from '../src/outbox.mjs';
 
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
@@ -31,10 +32,14 @@ try {
     replyToText: reply?.[1] || null,
     media,
   });
-  if (result.draftId) await enhanceDraft(db, config, result.draftId, { timeoutMs: 6_000 });
+  if (result.type === 'draft_created' && result.draftId) await enhanceDraft(db, config, result.draftId, { timeoutMs: 6_000 });
   const queued = db.prepare("SELECT id,body FROM outbox WHERE status='pending' ORDER BY id DESC LIMIT 1").get();
+  const deliveries = queued ? await flushOutbox(db, config, new Date(), 20) : [];
   db.close();
-  console.log(JSON.stringify({ context: `Shoham social workflow result: ${JSON.stringify(result)}.${queued ? ` Pending response for this turn: ${queued.body}` : ''} Respond in Hebrew, briefly, and do not claim publication unless the result includes a verified URL.` }));
+  const delivered = deliveries.some((item) => item.status === 'sent');
+  console.log(JSON.stringify({ context: delivered
+    ? `Shoham social workflow result: ${JSON.stringify(result)}. The exact response and any attached media were already sent through the authorized Hermes bridge. Reply exactly NO_REPLY.`
+    : `Shoham social workflow result: ${JSON.stringify(result)}.${queued ? ` Pending response for this turn: ${queued.body}` : ''} Respond in Hebrew, briefly, and do not claim publication unless the result includes a verified URL.` }));
 } catch (error) {
   console.log(JSON.stringify({ context: `Shoham social workflow failed safely: ${String(error.message || error)}. Ask one focused clarification and do not publish.` }));
 }

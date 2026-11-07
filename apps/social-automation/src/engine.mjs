@@ -27,10 +27,51 @@ function latestDraft(db, postId) {
   return db.prepare('SELECT * FROM drafts WHERE post_id=? ORDER BY version DESC LIMIT 1').get(postId);
 }
 
-function createDraft(db, post, brief, media, now) {
+function activeDrafts(db) {
+  return db.prepare(`SELECT d.*, p.public_id, p.status AS post_status
+    FROM drafts d JOIN posts p ON p.id=d.post_id
+    WHERE d.status='pending' AND p.status='awaiting_approval'
+    ORDER BY p.updated_at DESC`).all();
+}
+
+function isRevisionRequest(text) {
+  return /(תחליף|החלף|שנה|תקן|תוסיף|הוסף|תסיר|הסר|שלח\s+(?:אותה|אותו|את\s+הסקיצה)|תמונה|אימוג['׳]?י|לב\s+כתום|🧡)/i.test(normalize(text));
+}
+
+function wantsImageReplacement(text) {
+  return /(?:(?:תחליף|החלף|שנה|תוסיף|הוסף).{0,20}תמונה|תמונה.{0,20}(?:אחרת|חדשה|מתאימה|יותר))/i.test(normalize(text));
+}
+
+function wantsResend(text) {
+  return /שלח\s+(?:אותה|אותו|את\s+הסקיצה)(?:\s+פה)?/i.test(normalize(text));
+}
+
+function wantsOrangeHeart(text) {
+  return /(לב\s+כתום|אימוג['׳]?י.{0,20}כתום|🧡)/i.test(normalize(text));
+}
+
+function mediaKeys(media) {
+  return new Set(media.map((item) => item?.key).filter(Boolean));
+}
+
+function chooseAlternativeMedia(db, currentMedia = []) {
+  const excluded = mediaKeys(currentMedia);
+  const rows = db.prepare(`SELECT * FROM media_usage
+    ORDER BY CASE WHEN last_used_at IS NULL THEN 0 ELSE 1 END, COALESCE(last_used_at,''), media_key`).all();
+  const row = rows.find((candidate) => !excluded.has(candidate.media_key));
+  if (!row) return null;
+  const metadata = JSON.parse(row.metadata_json || '{}');
+  return { key: row.media_key, ...metadata, source: metadata.source || row.source };
+}
+
+function draftBody(post, version, copy, media) {
+  const mediaLine = media.length ? `\n\nמדיה: ${media.length} קבצים מצורפים` : '\n\nמדיה: טרם צורפה';
+  return `סקיצה ${post.public_id} · גרסה ${version}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}${mediaLine}\n\nלאישור השיבו ישירות: מאשר / מאשר לפייסבוק / מאשר לאינסטגרם`;
+}
+
+function createDraftVersion(db, post, copy, brief, media, now, type = 'draft_created') {
   const previous = latestDraft(db, post.id);
   const version = (previous?.version || 0) + 1;
-  const copy = draftFromBrief(brief);
   const value = { facebook: copy.facebook, instagram: copy.instagram, media };
   const hash = fingerprint(value);
   db.prepare("UPDATE drafts SET status='superseded' WHERE post_id=? AND status='pending'").run(post.id);
@@ -39,18 +80,58 @@ function createDraft(db, post, brief, media, now) {
     VALUES(?,?,?,?,?,?,'pending',?)`)
     .run(post.id, version, copy.facebook, copy.instagram, JSON.stringify(media), hash, nowIso(now));
   const draftId = Number(result.lastInsertRowid);
-  const mediaLine = media.length ? `\n\nמדיה: ${media.length} קבצים מצורפים` : '\n\nמדיה: טרם צורפה';
-  const body = `סקיצה ${post.public_id} · גרסה ${version}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}${mediaLine}\n\nלאישור השיבו ישירות: מאשר / מאשר לפייסבוק / מאשר לאינסטגרם`;
   enqueue(db, {
     dedupeKey: `draft:${draftId}`,
-    body,
+    body: draftBody(post, version, copy, media),
     mediaPath: media[0]?.path || null,
     entityType: 'draft',
     entityId: draftId,
   }, now);
   db.prepare("UPDATE posts SET status='awaiting_approval', brief=?, media_json=?, updated_at=?, expires_at=? WHERE id=?")
     .run(brief, JSON.stringify(media), nowIso(now), new Date(now.getTime() + 72 * 60 * 60 * 1000).toISOString(), post.id);
-  return { type: 'draft_created', post: post.public_id, draftId, version };
+  return { type, post: post.public_id, draftId, version };
+}
+
+function createDraft(db, post, brief, media, now) {
+  const copy = draftFromBrief(brief);
+  return createDraftVersion(db, post, copy, brief, media, now);
+}
+
+function reviseDraft(db, draft, event, now) {
+  const post = db.prepare('SELECT * FROM posts WHERE id=?').get(draft.post_id);
+  const currentMedia = JSON.parse(draft.media_json || post.media_json || '[]');
+  let media = event.media?.length ? event.media : currentMedia;
+  if (!event.media?.length && wantsImageReplacement(event.text)) {
+    const replacement = chooseAlternativeMedia(db, currentMedia);
+    if (!replacement) {
+      enqueue(db, { dedupeKey: `media-clarify:${event.id}`, body: 'לא מצאתי כרגע תמונה חלופית במקורות המאושרים. שלחו תמונה כאן או ציינו מאיזה אלבום לבחור.' }, now);
+      return { type: 'clarification_required' };
+    }
+    media = [replacement];
+  }
+  let copy = { facebook: draft.facebook_text, instagram: draft.instagram_text };
+  if (wantsOrangeHeart(event.text)) {
+    copy = {
+      facebook: copy.facebook.replace(/[💚💙❤️❤]/gu, '🧡'),
+      instagram: copy.instagram.replace(/[💚💙❤️❤]/gu, '🧡'),
+    };
+  }
+  const unchanged = fingerprint({ ...copy, media }) === draft.fingerprint;
+  if (unchanged && wantsResend(event.text)) {
+    enqueue(db, {
+      dedupeKey: `resend:${event.id}`,
+      body: draftBody(post, draft.version, copy, media),
+      mediaPath: media[0]?.path || null,
+      entityType: 'draft',
+      entityId: draft.id,
+    }, now);
+    return { type: 'draft_resent', post: post.public_id, draftId: draft.id, version: draft.version };
+  }
+  if (unchanged) {
+    enqueue(db, { dedupeKey: `revision-clarify:${event.id}`, body: 'לא היה ברור איזה שינוי לבצע בסקיצה הפעילה. מה בדיוק לשנות?' }, now);
+    return { type: 'clarification_required' };
+  }
+  return createDraftVersion(db, post, copy, post.brief, media, now, 'draft_revised');
 }
 
 function createPost(db, event, now) {
@@ -104,7 +185,22 @@ export function ingestEvent(db, config, event, now = new Date()) {
   if (!inserted.changes) return { type: 'duplicate' };
 
   const command = extractCommand(event.text);
-  const draft = findDraftByReply(db, event.replyToId, event.replyToText);
+  let draft = findDraftByReply(db, event.replyToId, event.replyToText);
+  const revision = command.type === 'content' && isRevisionRequest(event.text);
+  if (!draft && revision) {
+    const active = activeDrafts(db);
+    if (active.length === 1) draft = active[0];
+    else {
+      const result = { type: 'clarification_required' };
+      const body = active.length > 1
+        ? 'יש יותר מסקיצה פעילה אחת. נא להשיב ישירות לסקיצה שברצונכם לשנות.'
+        : 'אין כרגע סקיצה פעילה לשינוי. שלחו תמונה וטקסט או כתבו איזה פוסט חדש להכין.';
+      enqueue(db, { dedupeKey: `revision-target:${event.id}`, body }, now);
+      db.prepare('UPDATE inbound_messages SET processed_at=?, result_json=? WHERE source_id=?')
+        .run(nowIso(now), JSON.stringify(result), event.id);
+      return result;
+    }
+  }
   let result;
   if (command.type === 'stop' || command.type === 'start') {
     if (!config.ownerId || event.senderId !== config.ownerId) {
@@ -144,6 +240,8 @@ export function ingestEvent(db, config, event, now = new Date()) {
       }
       result = { type: 'retry_queued', channels: failed.map((row) => row.channel) };
     }
+  } else if (draft && revision) {
+    result = reviseDraft(db, draft, event, now);
   } else if (draft) {
     const post = db.prepare('SELECT * FROM posts WHERE id=?').get(draft.post_id);
     result = createDraft(db, post, normalize(event.text) || post.brief, event.media?.length ? event.media : JSON.parse(post.media_json), now);
