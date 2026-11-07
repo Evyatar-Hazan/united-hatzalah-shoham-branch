@@ -66,10 +66,10 @@ export async function generateCopy(config, brief, { timeoutMs = 45_000 } = {}) {
   }
 }
 
-export async function enhanceDraft(db, config, draftId) {
+export async function enhanceDraft(db, config, draftId, options = {}) {
   const row = db.prepare(`SELECT d.*, p.brief FROM drafts d JOIN posts p ON p.id=d.post_id WHERE d.id=?`).get(draftId);
   if (!row || row.status !== 'pending') return null;
-  const copy = await generateCopy(config, row.brief);
+  const copy = await generateCopy(config, row.brief, options);
   const media = JSON.parse(row.media_json || '[]');
   const hash = fingerprint({ facebook: copy.facebook, instagram: copy.instagram, media });
   db.prepare('UPDATE drafts SET facebook_text=?, instagram_text=?, fingerprint=? WHERE id=?')

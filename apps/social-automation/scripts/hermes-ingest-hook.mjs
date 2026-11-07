@@ -30,7 +30,7 @@ try {
     replyToText: reply?.[1] || null,
     media,
   });
-  if (result.draftId) await enhanceDraft(db, config, result.draftId);
+  if (result.draftId) await enhanceDraft(db, config, result.draftId, { timeoutMs: 6_000 });
   const queued = db.prepare("SELECT id,body FROM outbox WHERE status='pending' ORDER BY id DESC LIMIT 1").get();
   db.close();
   console.log(JSON.stringify({ context: `Shoham social workflow result: ${JSON.stringify(result)}.${queued ? ` Pending response for this turn: ${queued.body}` : ''} Respond in Hebrew, briefly, and do not claim publication unless the result includes a verified URL.` }));

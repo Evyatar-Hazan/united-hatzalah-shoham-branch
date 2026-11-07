@@ -19,6 +19,7 @@ export async function flushOutbox(db, config, now = new Date(), limit = 20) {
   const results = [];
   for (const row of rows) {
     if (config.whatsappDryRun ?? config.dryRun) {
+      db.prepare("UPDATE outbox SET status='dry_run', attempts=attempts+1 WHERE id=?").run(row.id);
       results.push({ id: row.id, status: 'dry_run' });
       continue;
     }

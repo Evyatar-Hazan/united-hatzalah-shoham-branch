@@ -65,12 +65,15 @@ async function runMorningJob(db, config, job, now) {
 
 async function runMediaSyncJob(db, config, services, job, now) {
   if (!services.browserBridge) return { status: 'failed', error: 'browser_bridge_unavailable' };
-  const result = await services.browserBridge.request('syncGooglePhotos', {
-    approvedAlbums: APPROVED_ALBUMS,
-    excludedAlbums: EXCLUDED_ALBUMS,
-  }, { timeoutMs: 180_000 });
+  const results = [];
+  for (let offset = 0; offset < APPROVED_ALBUMS.length; offset += 4) {
+    results.push(await services.browserBridge.request('syncGooglePhotos', {
+      approvedAlbums: APPROVED_ALBUMS.slice(offset, offset + 4),
+      excludedAlbums: EXCLUDED_ALBUMS,
+    }, { timeoutMs: 180_000 }));
+  }
   let imported = 0;
-  for (const item of result.imported || []) {
+  for (const item of results.flatMap((result) => result.imported || [])) {
     if (String(item.source || '').includes(EXCLUDED_ALBUMS[0])) continue;
     const prepared = await prepareMediaVariants(config, { path: item.path, source: item.source, album: item.album }, item.key);
     db.prepare(`INSERT INTO media_usage(media_key,source,metadata_json)

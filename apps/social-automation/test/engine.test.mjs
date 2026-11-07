@@ -6,6 +6,7 @@ import test from 'node:test';
 import { openDatabase } from '../src/database.mjs';
 import { ingestEvent, scheduleDueWork } from '../src/engine.mjs';
 import { processJobs } from '../src/jobs.mjs';
+import { flushOutbox } from '../src/outbox.mjs';
 
 function fixture() {
   const dataDir = mkdtempSync(join(tmpdir(), 'shoham-social-'));
@@ -73,5 +74,38 @@ test('dry-run publication never invokes an external publisher', async () => {
     const results = await processJobs(f.db, f.config);
     assert.equal(results[0].status, 'done');
     assert.equal(f.db.prepare('SELECT status FROM publications').get().status, 'dry_run');
+  } finally { f.close(); }
+});
+
+test('media sync splits approved albums into bounded browser batches', async () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-08T08:00:00.000Z');
+    f.db.prepare(`INSERT INTO jobs
+      (job_key,kind,payload_json,status,run_after,created_at,updated_at)
+      VALUES('media-sync-test','media_sync','{}','pending',?,?,?)`)
+      .run(now.toISOString(), now.toISOString(), now.toISOString());
+    const calls = [];
+    const browserBridge = {
+      async request(type, payload) {
+        calls.push({ type, payload });
+        return { imported: [] };
+      },
+    };
+    const results = await processJobs(f.db, f.config, now, 20, { browserBridge });
+    assert.equal(results[0].error, 'no_approved_media_imported');
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls.map(({ payload }) => payload.approvedAlbums.length), [4, 4]);
+    assert.ok(calls.every(({ type }) => type === 'syncGooglePhotos'));
+  } finally { f.close(); }
+});
+
+test('WhatsApp dry-run consumes queued messages without leaving them sendable', async () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'תרגול', media: [] });
+    const results = await flushOutbox(f.db, f.config);
+    assert.equal(results[0].status, 'dry_run');
+    assert.equal(f.db.prepare('SELECT status FROM outbox').get().status, 'dry_run');
   } finally { f.close(); }
 });
