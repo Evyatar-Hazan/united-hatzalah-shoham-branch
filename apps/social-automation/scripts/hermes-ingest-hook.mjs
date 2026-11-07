@@ -42,7 +42,7 @@ try {
   } catch {
     db.close();
     console.log(JSON.stringify({ context: 'Shoham semantic analysis failed closed. Reply exactly NO_REPLY.' }));
-    process.exit(0);
+    process.exit(1);
   }
   if (semantic.intent === 'group_conversation') {
     db.close();
@@ -74,4 +74,5 @@ try {
     : `Shoham social workflow result: ${JSON.stringify(result)}.${queued ? ` Pending response for this turn: ${queued.body}` : ''} Respond in Hebrew, briefly, and do not claim publication unless the result includes a verified URL.` }));
 } catch (error) {
   console.log(JSON.stringify({ context: `Shoham social workflow failed safely: ${String(error.message || error)}. Ask one focused clarification and do not publish.` }));
+  process.exitCode = 1;
 }

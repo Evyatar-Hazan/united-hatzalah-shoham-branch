@@ -21,6 +21,8 @@ export function loadConfig(env = process.env) {
     hermesDb: resolve(expandHome(env.SOCIAL_HERMES_DB || join(homedir(), '.hermes/state.db'))),
     hermesCommand: resolve(expandHome(env.SOCIAL_HERMES_COMMAND || join(homedir(), '.local/bin/hermes'))),
     codexCommand: resolve(expandHome(env.SOCIAL_CODEX_COMMAND || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex')),
+    intakeSpoolDir: resolve(expandHome(env.SOCIAL_INTAKE_SPOOL_DIR || join(dataDir, 'intake-spool'))),
+    intakeHookRunner: resolve(expandHome(env.SOCIAL_INTAKE_HOOK_RUNNER || join(dataDir, 'run-hook.sh'))),
     semanticRouterFixture: env.NODE_ENV === 'test' ? env.SOCIAL_SEMANTIC_DECISION_JSON || '' : '',
     bridgeUrl: env.SOCIAL_BRIDGE_URL || 'http://127.0.0.1:3021',
     metaPublishCommand: env.SOCIAL_META_PUBLISH_COMMAND || '',

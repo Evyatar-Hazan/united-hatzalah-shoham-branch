@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,15 +26,16 @@ def _event(chat_id="120363432982998492@g.us"):
     )
 
 
-def test_only_target_group_is_intercepted(monkeypatch):
+def test_only_target_group_is_intercepted(monkeypatch, tmp_path):
     module = _load()
-    created = []
-    class Task:
-        def add_done_callback(self, callback):
-            return None
-    monkeypatch.setattr(module.asyncio, "get_running_loop", lambda: SimpleNamespace(create_task=lambda coro: created.append(coro) or Task()))
+    monkeypatch.setattr(module, "SPOOL_DIR", tmp_path)
     assert module._on_pre_gateway_dispatch(event=_event("other@g.us")) is None
     result = module._on_pre_gateway_dispatch(event=_event())
     assert result == {"action": "skip", "reason": "shoham-social-deterministic-intake"}
-    for coro in created:
-        coro.close()
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 1
+    payload = json.loads(files[0].read_text())
+    assert payload["extra"]["user_message"] == "שיחה רגילה"
+
+    assert module._on_pre_gateway_dispatch(event=_event()) == result
+    assert len(list(tmp_path.glob("*.json"))) == 1

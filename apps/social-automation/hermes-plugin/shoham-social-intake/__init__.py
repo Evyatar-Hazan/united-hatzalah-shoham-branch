@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import asyncio
+import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 TARGET_CHAT = "120363432982998492@g.us"
-RUNNER = Path.home() / "Library/Application Support/ShohamSocial/run-hook.sh"
-_tasks: set[asyncio.Task[Any]] = set()
+SPOOL_DIR = Path.home() / "Library/Application Support/ShohamSocial/intake-spool"
 
 
 def _is_target(event: Any) -> bool:
@@ -29,7 +29,7 @@ def _message(event: Any) -> str:
     return text
 
 
-async def _process(event: Any) -> None:
+def _persist(event: Any) -> bool:
     payload = {
         "session_id": "shoham-social-intake",
         "extra": {
@@ -43,31 +43,39 @@ async def _process(event: Any) -> None:
             "reply_to_text": str(getattr(event, "reply_to_text", "") or ""),
         },
     }
+    source_id = payload["extra"]["turn_id"]
+    filename = hashlib.sha256(source_id.encode()).hexdigest() + ".json"
+    SPOOL_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = SPOOL_DIR / filename
     try:
-        process = await asyncio.create_subprocess_exec(
-            str(RUNNER),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(json.dumps(payload, ensure_ascii=False).encode()), timeout=45
-        )
-        if process.returncode != 0:
-            logger.error("Shoham intake failed: %s", stderr.decode(errors="replace")[:500])
-        elif stdout:
-            logger.debug("Shoham intake completed")
-    except Exception:
-        logger.exception("Shoham intake failed closed")
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return True
+    except OSError:
+        logger.exception("Shoham intake could not open durable spool")
+        return False
+    try:
+        content = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        os.write(descriptor, content)
+        os.fsync(descriptor)
+        return True
+    except OSError:
+        logger.exception("Shoham intake could not persist durable spool")
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    finally:
+        os.close(descriptor)
 
 
 def _on_pre_gateway_dispatch(**kwargs: Any) -> dict[str, str] | None:
     event = kwargs.get("event")
     if event is None or not _is_target(event):
         return None
-    task = asyncio.get_running_loop().create_task(_process(event))
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+    if not _persist(event):
+        return {"action": "skip", "reason": "shoham-social-intake-persist-failed"}
     return {"action": "skip", "reason": "shoham-social-deterministic-intake"}
 
 
