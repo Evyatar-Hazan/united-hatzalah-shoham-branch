@@ -11,11 +11,12 @@ try {
   const payload = JSON.parse(input || '{}');
   const extra = payload.extra || {};
   if (extra.platform !== 'whatsapp') process.exit(0);
+  const config = loadConfig();
+  if (String(extra.chat_id || '') !== String(config.groupId || '')) process.exit(0);
   const message = String(extra.user_message || '');
   const reply = message.match(/^\[Replying to (?:your previous message|): "([\s\S]*?)"\]\s*/);
   const text = reply ? message.slice(reply[0].length) : message;
   const rawMedia = [...message.matchAll(/(?:Image|Document|Video|Audio)[^\n]*?path:\s*`?([^`\n]+)`?/gi)].map((match) => ({ path: match[1].trim(), source: 'whatsapp' }));
-  const config = loadConfig();
   const db = openDatabase(config);
   const media = [];
   for (const [index, item] of rawMedia.entries()) {
