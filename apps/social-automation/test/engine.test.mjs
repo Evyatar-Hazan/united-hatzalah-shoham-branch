@@ -64,6 +64,35 @@ test('latest draft query resends the active draft with its media and does not cr
   } finally { f.close(); }
 });
 
+test('semantic group conversation never becomes draft copy even when replying to a draft', () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [{ key: 'photo', path: '/photo.jpg' }], semantic: { intent: 'create_post', confidence: 0.99 } });
+    const draftOutbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
+    f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-message', draftOutbox.id);
+    const result = ingestEvent(f.db, f.config, {
+      id: 'm2', chatId: 'group@g.us', senderId: 'u2', text: '@all יש למישהו הערות או שאפשר לפרסם?',
+      replyToId: 'draft-message', semantic: { intent: 'group_conversation', confidence: 0.99 },
+    });
+    assert.equal(result.type, 'ignored_conversation');
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM posts').get().count, 1);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM drafts').get().count, 1);
+    assert.doesNotMatch(f.db.prepare('SELECT facebook_text FROM drafts').get().facebook_text, /@all/);
+  } finally { f.close(); }
+});
+
+test('semantic create-post decision creates a draft without keyword rules', () => {
+  const f = fixture();
+  try {
+    const result = ingestEvent(f.db, f.config, {
+      id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'היום התקיים תרגול מתנדבים',
+      semantic: { intent: 'create_post', confidence: 0.97 },
+    });
+    assert.equal(result.type, 'draft_created');
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM posts').get().count, 1);
+  } finally { f.close(); }
+});
+
 test('a targeted revision applies to the only active draft without a direct reply', () => {
   const f = fixture();
   try {

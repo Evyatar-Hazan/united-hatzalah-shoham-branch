@@ -98,7 +98,9 @@ function reviseDraft(db, draft, event, now) {
   const post = db.prepare('SELECT * FROM posts WHERE id=?').get(draft.post_id);
   const currentMedia = JSON.parse(draft.media_json || post.media_json || '[]');
   let media = event.media?.length ? event.media : currentMedia;
-  if (!event.media?.length && wantsImageReplacement(event.text)) {
+  const replaceImage = event.semantic ? event.semantic.replaceImage : wantsImageReplacement(event.text);
+  const resend = event.semantic ? event.semantic.resend : wantsResend(event.text);
+  if (!event.media?.length && replaceImage) {
     const replacement = chooseAlternativeMedia(db, currentMedia);
     if (!replacement) {
       enqueue(db, { dedupeKey: `media-clarify:${event.id}`, body: 'לא מצאתי כרגע תמונה חלופית במקורות המאושרים. שלחו תמונה כאן או ציינו מאיזה אלבום לבחור.' }, now);
@@ -106,15 +108,15 @@ function reviseDraft(db, draft, event, now) {
     }
     media = [replacement];
   }
-  let copy = { facebook: draft.facebook_text, instagram: draft.instagram_text };
-  if (wantsOrangeHeart(event.text)) {
+  let copy = event.semantic?.copy || { facebook: draft.facebook_text, instagram: draft.instagram_text };
+  if (!event.semantic && wantsOrangeHeart(event.text)) {
     copy = {
       facebook: copy.facebook.replace(/[💚💙❤️❤]/gu, '🧡'),
       instagram: copy.instagram.replace(/[💚💙❤️❤]/gu, '🧡'),
     };
   }
   const unchanged = fingerprint({ ...copy, media }) === draft.fingerprint;
-  if (unchanged && wantsResend(event.text)) {
+  if (unchanged && resend) {
     enqueue(db, {
       dedupeKey: `resend:${event.id}`,
       body: draftBody(post, draft.version, copy, media),
@@ -200,9 +202,15 @@ export function ingestEvent(db, config, event, now = new Date()) {
   if (!inserted.changes) return { type: 'duplicate' };
 
   const command = extractCommand(event.text);
-  const latestQuery = isLatestDraftQuery(event.text);
+  const semanticIntent = event.semantic?.intent || null;
+  const effectiveCommand = semanticIntent === 'approve_draft'
+    ? { type: 'approve', channels: event.semantic.channels?.length ? event.semantic.channels : ['facebook', 'instagram'] }
+    : semanticIntent === 'cancel_draft' ? { type: 'cancel' }
+      : semanticIntent === 'system_control' ? { type: event.semantic.controlAction || 'content' }
+        : command;
+  const latestQuery = semanticIntent ? semanticIntent === 'latest_draft' : isLatestDraftQuery(event.text);
   let draft = findDraftByReply(db, event.replyToId, event.replyToText);
-  const revision = command.type === 'content' && isRevisionText(event.text);
+  const revision = semanticIntent ? semanticIntent === 'revise_draft' : command.type === 'content' && isRevisionText(event.text);
   if (!draft && revision) {
     const active = activeDrafts(db);
     if (active.length === 1) draft = active[0];
@@ -218,23 +226,26 @@ export function ingestEvent(db, config, event, now = new Date()) {
     }
   }
   let result;
-  if (command.type === 'stop' || command.type === 'start') {
+  if (effectiveCommand.type === 'stop' || effectiveCommand.type === 'start') {
     if (!config.ownerId || event.senderId !== config.ownerId) {
       result = { type: 'owner_only' };
       enqueue(db, { dedupeKey: `owner-only:${event.id}`, body: 'רק אביתר רשאי לעצור או להפעיל את המערכת.' }, now);
     } else {
-      const enabled = command.type === 'start';
+      const enabled = effectiveCommand.type === 'start';
       setSetting(db, 'system_enabled', enabled, now);
       result = { type: enabled ? 'started' : 'stopped' };
       enqueue(db, { dedupeKey: `system:${event.id}`, body: enabled ? 'המערכת הופעלה.' : 'המערכת נעצרה. הודעות יישמרו אך לא יעובדו עד להפעלה.' }, now);
     }
   } else if (!getSetting(db, 'system_enabled', true)) {
     result = { type: 'paused' };
+  } else if (semanticIntent === 'clarification') {
+    result = { type: 'clarification_required' };
+    enqueue(db, { dedupeKey: `semantic-clarify:${event.id}`, body: event.semantic.question || 'לא ברור לי מה תרצו שאעשה. אפשר לחדד?' }, now);
   } else if (latestQuery) {
     result = handleLatestDraftQuery(db, event, now);
-  } else if (command.type === 'approve') {
-    result = handleApproval(db, event, command, draft, now);
-  } else if (command.type === 'cancel') {
+  } else if (effectiveCommand.type === 'approve') {
+    result = handleApproval(db, event, effectiveCommand, draft, now);
+  } else if (effectiveCommand.type === 'cancel') {
     if (!draft) {
       result = { type: 'clarification_required' };
       enqueue(db, { dedupeKey: `cancel-clarify:${event.id}`, body: 'כדי לבטל, נא להשיב ישירות לסקיצה.' }, now);
@@ -260,17 +271,21 @@ export function ingestEvent(db, config, event, now = new Date()) {
     }
   } else if (draft && revision) {
     result = reviseDraft(db, draft, event, now);
-  } else if (draft) {
+  } else if (draft && !semanticIntent) {
     const post = db.prepare('SELECT * FROM posts WHERE id=?').get(draft.post_id);
     result = createDraft(db, post, normalize(event.text) || post.brief, event.media?.length ? event.media : JSON.parse(post.media_json), now);
-  } else {
+  } else if (!semanticIntent || semanticIntent === 'create_post') {
     const post = createPost(db, event, now);
     if (!normalize(event.text) && !(event.media || []).length) {
       result = { type: 'clarification_required' };
       enqueue(db, { dedupeKey: `empty:${event.id}`, body: 'לא התקבלו טקסט או תמונה. מה תרצו להכין?' }, now);
     } else {
-      result = createDraft(db, post, event.text, event.media || [], now);
+      result = event.semantic?.copy
+        ? createDraftVersion(db, post, event.semantic.copy, event.text, event.media || [], now)
+        : createDraft(db, post, event.text, event.media || [], now);
     }
+  } else {
+    result = { type: 'ignored_conversation' };
   }
   db.prepare('UPDATE inbound_messages SET processed_at=?, result_json=? WHERE source_id=?')
     .run(nowIso(now), JSON.stringify(result), event.id);

@@ -39,6 +39,8 @@ async def _process(event: Any) -> None:
             "turn_id": str(getattr(event, "message_id", "") or "event"),
             "sender_id": str(getattr(event, "user_id", "") or "unknown"),
             "reply_to_is_own": bool(getattr(event, "reply_to_is_own_message", False)),
+            "reply_to_id": str(getattr(event, "reply_to_message_id", "") or ""),
+            "reply_to_text": str(getattr(event, "reply_to_text", "") or ""),
         },
     }
     try:

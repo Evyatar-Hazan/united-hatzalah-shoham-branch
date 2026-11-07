@@ -17,7 +17,7 @@ function runHook(chatId) {
       extra: {
         platform: 'whatsapp',
         chat_id: chatId,
-        user_message: 'בדיקת סקיצה',
+        user_message: 'תכין פוסט חדש על פעילות קהילתית',
         turn_id: `turn-${chatId}`,
         sender_id: 'test-sender',
       },
@@ -30,6 +30,8 @@ function runHook(chatId) {
       SOCIAL_DRY_RUN: 'true',
       SOCIAL_WHATSAPP_DRY_RUN: 'true',
       SOCIAL_META_DRY_RUN: 'true',
+      NODE_ENV: 'test',
+      SOCIAL_SEMANTIC_DECISION_JSON: '{"intent":"create_post","confidence":0.99,"reason":"explicit request","question":null,"channels":[]}',
     },
   });
   return { dataDir, result };
