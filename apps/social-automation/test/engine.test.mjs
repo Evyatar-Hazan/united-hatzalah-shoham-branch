@@ -46,6 +46,24 @@ test('approval without a direct reply asks for clarification', () => {
   } finally { f.close(); }
 });
 
+test('latest draft query resends the active draft with its media and does not create a post', () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [{ key: 'photo', path: '/photo.jpg' }] });
+    const draft = f.db.prepare("SELECT * FROM drafts WHERE status='pending'").get();
+    f.db.prepare('UPDATE drafts SET facebook_text=replace(facebook_text, ?, ?), instagram_text=replace(instagram_text, ?, ?) WHERE id=?')
+      .run('💚', '🧡', '💚', '🧡', draft.id);
+    const result = ingestEvent(f.db, f.config, { id: 'm2', chatId: 'group@g.us', senderId: 'u2', text: 'מהי הסקיצה האחרונה שיש לנו?' });
+    assert.equal(result.type, 'latest_draft');
+    assert.equal(result.draftId, draft.id);
+    const response = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key='latest:m2'").get();
+    assert.equal(response.media_path, '/photo.jpg');
+    assert.match(response.body, /🧡/);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM posts').get().count, 1);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM drafts').get().count, 1);
+  } finally { f.close(); }
+});
+
 test('a targeted revision applies to the only active draft without a direct reply', () => {
   const f = fixture();
   try {

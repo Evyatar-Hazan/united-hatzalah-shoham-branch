@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendSignature, draftFromBrief, extractCommand, fingerprint, normalize } from './text.mjs';
 import { getSetting, nowIso, setSetting } from './database.mjs';
-import { isRevisionText } from './intent.mjs';
+import { isLatestDraftQuery, isRevisionText } from './intent.mjs';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -171,6 +171,24 @@ function handleApproval(db, event, command, draft, now) {
   return { type: 'approved', draftId: draft.id, channels: command.channels };
 }
 
+function handleLatestDraftQuery(db, event, now) {
+  const draft = activeDrafts(db)[0];
+  if (!draft) {
+    enqueue(db, { dedupeKey: `latest-empty:${event.id}`, body: 'אין כרגע סקיצה פעילה שממתינה לאישור.' }, now);
+    return { type: 'no_active_draft' };
+  }
+  const media = JSON.parse(draft.media_json || '[]');
+  const copy = { facebook: draft.facebook_text, instagram: draft.instagram_text };
+  enqueue(db, {
+    dedupeKey: `latest:${event.id}`,
+    body: `זו הסקיצה הפעילה האחרונה:\n\n${draftBody(draft, draft.version, copy, media)}`,
+    mediaPath: media[0]?.path || null,
+    entityType: 'draft',
+    entityId: draft.id,
+  }, now);
+  return { type: 'latest_draft', post: draft.public_id, draftId: draft.id, version: draft.version };
+}
+
 export function ingestEvent(db, config, event, now = new Date()) {
   if (!event?.id || !event?.chatId || !event?.senderId) throw new Error('event requires id, chatId and senderId');
   if (config.groupId && event.chatId !== config.groupId) return { type: 'ignored_chat' };
@@ -182,6 +200,7 @@ export function ingestEvent(db, config, event, now = new Date()) {
   if (!inserted.changes) return { type: 'duplicate' };
 
   const command = extractCommand(event.text);
+  const latestQuery = isLatestDraftQuery(event.text);
   let draft = findDraftByReply(db, event.replyToId, event.replyToText);
   const revision = command.type === 'content' && isRevisionText(event.text);
   if (!draft && revision) {
@@ -211,6 +230,8 @@ export function ingestEvent(db, config, event, now = new Date()) {
     }
   } else if (!getSetting(db, 'system_enabled', true)) {
     result = { type: 'paused' };
+  } else if (latestQuery) {
+    result = handleLatestDraftQuery(db, event, now);
   } else if (command.type === 'approve') {
     result = handleApproval(db, event, command, draft, now);
   } else if (command.type === 'cancel') {

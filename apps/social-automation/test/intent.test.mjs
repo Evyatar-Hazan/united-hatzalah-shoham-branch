@@ -28,3 +28,10 @@ test('an image submission is handled', () => {
 test('approval without a reply to a bot draft stays silent', () => {
   assert.equal(classifySocialIntent({ text: 'מאשר' }).action, 'silence');
 });
+
+test('asking for the latest draft is handled as a status request', () => {
+  assert.deepEqual(
+    classifySocialIntent({ text: 'מהי הסקיצה האחרונה שיש לנו?' }),
+    { action: 'handle', reason: 'latest_draft_query' },
+  );
+});
