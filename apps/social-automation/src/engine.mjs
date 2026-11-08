@@ -24,6 +24,29 @@ function findDraftByReply(db, replyToId, replyToText = '') {
     JOIN posts p ON p.id=d.post_id WHERE p.public_id=? AND d.version=?`).get(match[1].toUpperCase(), Number(match[2]));
 }
 
+export function resolveApprovalClarification(db, text, now = new Date()) {
+  if (!/^(?:כן|מאשר|מאשר לפרסום)$/u.test(normalize(text))) return null;
+  const prompt = db.prepare(`SELECT * FROM outbox
+    WHERE status='sent' AND dedupe_key LIKE 'semantic-clarify:%'
+    ORDER BY id DESC LIMIT 1`).get();
+  if (!prompt?.sent_at) return null;
+  const sentAt = new Date(prompt.sent_at);
+  if (!Number.isFinite(sentAt.getTime()) || now.getTime() - sentAt.getTime() > 15 * 60 * 1000) return null;
+  const match = String(prompt.body || '').match(/(?:טיוטה|סקיצה)\s+([A-Z0-9]+).*?גרסה\s+(\d+)/iu);
+  if (!match) return null;
+  const draft = db.prepare(`SELECT d.id,d.version,p.public_id
+    FROM drafts d JOIN posts p ON p.id=d.post_id
+    WHERE p.public_id=? AND d.version=? AND d.status='pending' AND p.status='awaiting_approval'`).get(
+      match[1].toUpperCase(), Number(match[2]),
+    );
+  if (!draft) return null;
+  return {
+    draftId: draft.id,
+    channels: ['facebook', 'instagram'],
+    replyToText: `סקיצה ${draft.public_id} · גרסה ${draft.version}`,
+  };
+}
+
 function latestDraft(db, postId) {
   return db.prepare('SELECT * FROM drafts WHERE post_id=? ORDER BY version DESC LIMIT 1').get(postId);
 }

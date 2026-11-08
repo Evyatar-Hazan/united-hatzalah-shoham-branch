@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { openDatabase } from '../src/database.mjs';
-import { ingestEvent, scheduleDueWork } from '../src/engine.mjs';
+import { ingestEvent, resolveApprovalClarification, scheduleDueWork } from '../src/engine.mjs';
 import { processJobs } from '../src/jobs.mjs';
 import { flushOutbox } from '../src/outbox.mjs';
 
@@ -43,6 +43,43 @@ test('approval without a direct reply asks for clarification', () => {
   try {
     const result = ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'מאשר' });
     assert.equal(result.type, 'clarification_required');
+  } finally { f.close(); }
+});
+
+test('a short yes confirms the exact draft named in the latest bot clarification', () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-08T07:36:00.000Z');
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'תרגול מתנדבים', media: [] }, now);
+    const draft = f.db.prepare("SELECT d.*,p.public_id FROM drafts d JOIN posts p ON p.id=d.post_id WHERE d.status='pending'").get();
+    f.db.prepare(`INSERT INTO outbox
+      (dedupe_key,kind,body,status,created_at,sent_at) VALUES(?,'text',?,'sent',?,?)`)
+      .run('semantic-clarify:m2', `לפרסם את טיוטה ${draft.public_id} בגרסה ${draft.version} בפייסבוק ובאינסטגרם?`, now.toISOString(), now.toISOString());
+    const resolved = resolveApprovalClarification(f.db, 'כן', new Date(now.getTime() + 30_000));
+    assert.deepEqual(resolved, {
+      draftId: draft.id,
+      channels: ['facebook', 'instagram'],
+      replyToText: `סקיצה ${draft.public_id} · גרסה ${draft.version}`,
+    });
+    const result = ingestEvent(f.db, f.config, {
+      id: 'm3', chatId: 'group@g.us', senderId: 'u2', text: 'כן',
+      replyToText: resolved.replyToText,
+      semantic: { intent: 'approve_draft', confidence: 1, channels: resolved.channels },
+    }, new Date(now.getTime() + 30_000));
+    assert.equal(result.type, 'approved');
+  } finally { f.close(); }
+});
+
+test('a short yes does not approve an expired clarification context', () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-08T07:00:00.000Z');
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'תרגול מתנדבים', media: [] }, now);
+    const draft = f.db.prepare("SELECT d.*,p.public_id FROM drafts d JOIN posts p ON p.id=d.post_id WHERE d.status='pending'").get();
+    f.db.prepare(`INSERT INTO outbox
+      (dedupe_key,kind,body,status,created_at,sent_at) VALUES(?,'text',?,'sent',?,?)`)
+      .run('semantic-clarify:m2', `לפרסם את טיוטה ${draft.public_id} בגרסה ${draft.version} בפייסבוק ובאינסטגרם?`, now.toISOString(), now.toISOString());
+    assert.equal(resolveApprovalClarification(f.db, 'כן', new Date(now.getTime() + 16 * 60_000)), null);
   } finally { f.close(); }
 });
 

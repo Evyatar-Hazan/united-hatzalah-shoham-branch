@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { openDatabase } from '../src/database.mjs';
 import { loadConfig } from '../src/config.mjs';
-import { ingestEvent } from '../src/engine.mjs';
+import { ingestEvent, resolveApprovalClarification } from '../src/engine.mjs';
 import { prepareMediaVariants } from '../src/media-processor.mjs';
 import { flushOutbox } from '../src/outbox.mjs';
 import { classifyInboundMessage } from '../src/semantic-router.mjs';
@@ -23,9 +23,19 @@ try {
     FROM drafts d JOIN posts p ON p.id=d.post_id
     WHERE d.status='pending' AND p.status='awaiting_approval'
     ORDER BY p.updated_at DESC LIMIT 1`).get();
+  const approvalClarification = resolveApprovalClarification(db, text);
   let semantic;
   try {
-    semantic = await classifyInboundMessage(config, {
+    semantic = approvalClarification ? {
+      intent: 'approve_draft',
+      confidence: 1,
+      reason: 'affirmative_answer_to_exact_draft_confirmation',
+      channels: approvalClarification.channels,
+      copy: null,
+      replaceImage: false,
+      resend: false,
+      controlAction: null,
+    } : await classifyInboundMessage(config, {
       message: text,
       isOwner: Boolean(config.ownerId && String(extra.sender_id || '') === String(config.ownerId)),
       replyToBot: Boolean(extra.reply_to_is_own || reply?.[0]?.includes('your previous message')),
@@ -60,8 +70,8 @@ try {
     senderId: String(extra.sender_id || 'unknown'),
     text,
     replyToId: String(extra.reply_to_id || '') || null,
-    replyToText: String(extra.reply_to_text || reply?.[1] || '') || null,
-    replyToIsOwn: Boolean(extra.reply_to_is_own || reply?.[0]?.includes('your previous message')),
+    replyToText: String(extra.reply_to_text || reply?.[1] || approvalClarification?.replyToText || '') || null,
+    replyToIsOwn: Boolean(extra.reply_to_is_own || reply?.[0]?.includes('your previous message') || approvalClarification),
     semantic,
     media,
   });
