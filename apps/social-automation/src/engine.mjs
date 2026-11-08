@@ -322,7 +322,8 @@ export function scheduleDueWork(db, now = new Date()) {
   const weekday = parts.weekday;
   const minutes = Number(parts.hour) * 60 + Number(parts.minute);
   const workday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'].includes(weekday);
-  const pendingMorning = db.prepare("SELECT 1 FROM posts WHERE source_kind='morning' AND status='awaiting_approval' LIMIT 1").get();
+  const pendingMorning = db.prepare(`SELECT 1 FROM posts p JOIN drafts d ON d.post_id=p.id
+    WHERE p.source_kind='morning' AND p.status='awaiting_approval' AND d.status='pending' LIMIT 1`).get();
   if (workday && minutes >= 490) {
     const syncKey = `media-sync:${date}`;
     db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)

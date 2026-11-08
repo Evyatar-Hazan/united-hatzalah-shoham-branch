@@ -211,6 +211,90 @@ test('missed morning times create only one current proposal job', () => {
   } finally { f.close(); }
 });
 
+test('an orphaned morning post without a draft does not block the current proposal', () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-08T06:31:00.000Z');
+    f.db.prepare(`INSERT INTO posts
+      (public_id,status,source_kind,brief,media_json,created_at,updated_at)
+      VALUES('MORPHAN','awaiting_approval','morning','','[]',?,?)`).run(now.toISOString(), now.toISOString());
+    scheduleDueWork(f.db, now);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE kind='morning_proposal'").get().count, 1);
+  } finally { f.close(); }
+});
+
+test('daily proposal is idempotent, includes media, and completes both publication ledgers', async () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-08T06:31:00.000Z');
+    f.db.prepare('INSERT INTO media_usage(media_key,source,metadata_json) VALUES(?,?,?)')
+      .run('approved-photo', 'google-photos:approved', JSON.stringify({ path: '/approved.jpg', variants: { facebook: '/approved-facebook.jpg', instagram: '/approved-instagram.jpg' } }));
+    scheduleDueWork(f.db, now);
+    f.db.prepare("UPDATE jobs SET status='done' WHERE kind='media_sync'").run();
+    const copy = {
+      facebook: 'הבוקר אנחנו מזכירים שהמוכנות שלנו מתחילה באנשים ובציוד.',
+      instagram: 'מוכנים למען הקהילה 🧡\n\n#איחודהצלה #שוהם #קהילה',
+      clarification: null,
+      generator: 'codex',
+    };
+    const morning = await processJobs(f.db, f.config, now, 20, { generateCopy: async () => copy });
+    assert.deepEqual(morning.map(({ kind, status }) => ({ kind, status })), [{ kind: 'morning_proposal', status: 'done' }]);
+    const post = f.db.prepare("SELECT * FROM posts WHERE source_kind='morning'").get();
+    const draft = f.db.prepare('SELECT * FROM drafts WHERE post_id=?').get(post.id);
+    const draftMedia = JSON.parse(draft.media_json);
+    const proposal = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key='morning:2026-11-08:draft'").get();
+    assert.equal(post.public_id, 'M20261108');
+    assert.equal(draftMedia[0].path, '/approved.jpg');
+    assert.equal(proposal.media_path, '/approved.jpg');
+    assert.equal(f.db.prepare("SELECT post_id FROM media_usage WHERE media_key='approved-photo'").get().post_id, post.id);
+
+    f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('morning-draft-message', proposal.id);
+    const approval = ingestEvent(f.db, f.config, {
+      id: 'approve-morning', chatId: 'group@g.us', senderId: 'member', text: 'מאשר', replyToId: 'morning-draft-message',
+    }, new Date(now.getTime() + 60_000));
+    assert.equal(approval.type, 'approved');
+    f.config.metaDryRun = false;
+    const calls = [];
+    const browserBridge = {
+      async request(type, payload) {
+        calls.push({ type, payload });
+        return payload.channel === 'facebook'
+          ? { id: 'fb-post', url: 'https://www.facebook.com/ihud.shoham/posts/fb-post/' }
+          : { id: 'ig-post', url: 'https://www.instagram.com/ihud.shoham/p/ig-post/' };
+      },
+    };
+    const published = await processJobs(f.db, f.config, new Date(now.getTime() + 120_000), 20, { browserBridge });
+    assert.equal(published.length, 2);
+    assert.ok(published.every(({ status }) => status === 'done'));
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM publications WHERE status='published'").get().count, 2);
+    assert.equal(f.db.prepare('SELECT status FROM posts WHERE id=?').get(post.id).status, 'published');
+    assert.equal(f.db.prepare('SELECT status FROM drafts WHERE id=?').get(draft.id).status, 'published');
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(({ type, payload }) => type === 'publishMeta' && payload.media[0].path === '/approved.jpg'));
+  } finally { f.close(); }
+});
+
+test('a partial morning post is resumed instead of inserted twice', async () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-08T06:31:00.000Z');
+    f.db.prepare('INSERT INTO media_usage(media_key,source,metadata_json) VALUES(?,?,?)')
+      .run('approved-photo', 'google-photos:approved', JSON.stringify({ path: '/approved.jpg' }));
+    f.db.prepare(`INSERT INTO posts
+      (public_id,status,source_kind,brief,media_json,created_at,updated_at,expires_at)
+      VALUES('M20261108','awaiting_approval','morning','','[]',?,?,?)`)
+      .run(now.toISOString(), now.toISOString(), new Date(now.getTime() + 86_400_000).toISOString());
+    f.db.prepare(`INSERT INTO jobs
+      (job_key,kind,payload_json,status,run_after,created_at,updated_at)
+      VALUES('morning:2026-11-08','morning_proposal','{}','pending',?,?,?)`)
+      .run(now.toISOString(), now.toISOString(), now.toISOString());
+    const result = await processJobs(f.db, f.config, now, 20, { generateCopy: async () => ({ facebook: 'פייסבוק', instagram: 'אינסטגרם' }) });
+    assert.equal(result[0].status, 'done');
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM posts').get().count, 1);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM drafts').get().count, 1);
+  } finally { f.close(); }
+});
+
 test('dry-run publication never invokes an external publisher', async () => {
   const f = fixture();
   try {
@@ -244,6 +328,23 @@ test('media sync splits approved albums into bounded browser batches', async () 
     assert.equal(calls.length, 2);
     assert.deepEqual(calls.map(({ payload }) => payload.approvedAlbums.length), [4, 4]);
     assert.ok(calls.every(({ type }) => type === 'syncGooglePhotos'));
+  } finally { f.close(); }
+});
+
+test('media sync remains healthy when the approved local catalog already has media', async () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-08T08:00:00.000Z');
+    f.db.prepare('INSERT INTO media_usage(media_key,source,metadata_json) VALUES(?,?,?)')
+      .run('existing', 'google-photos:approved', JSON.stringify({ path: '/existing.jpg' }));
+    f.db.prepare(`INSERT INTO jobs
+      (job_key,kind,payload_json,status,run_after,created_at,updated_at)
+      VALUES('media-sync-existing','media_sync','{}','pending',?,?,?)`)
+      .run(now.toISOString(), now.toISOString(), now.toISOString());
+    const browserBridge = { async request() { return { imported: [] }; } };
+    const results = await processJobs(f.db, f.config, now, 20, { browserBridge });
+    assert.equal(results[0].status, 'done');
+    assert.equal(f.db.prepare("SELECT status FROM jobs WHERE job_key='media-sync-existing'").get().status, 'done');
   } finally { f.close(); }
 });
 

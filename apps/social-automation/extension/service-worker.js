@@ -160,7 +160,76 @@ function composerSnapshot() {
   };
 }
 
+function verificationNeedle(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+}
+
+async function findFacebookPostUrl(text) {
+  const needle = verificationNeedle(text);
+  if (!needle) return null;
+  const tab = await openOrReuse('https://www.facebook.com/ihud.shoham/');
+  for (let step = 0; step < 6; step += 1) {
+    const found = await run(tab.id, (expected) => {
+      const normalized = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const matches = [...document.querySelectorAll('div,span')]
+        .filter((element) => normalized(element.innerText).includes(expected));
+      for (const match of matches) {
+        let container = match;
+        for (let depth = 0; depth < 10 && container; depth += 1, container = container.parentElement) {
+          const link = [...container.querySelectorAll('a[href]')]
+            .find((candidate) => /\/posts\/\d+\/?(?:[?#]|$)/.test(candidate.href));
+          if (link) {
+            const url = new URL(link.href);
+            return `${url.origin}${url.pathname}`;
+          }
+        }
+      }
+      return null;
+    }, [needle]);
+    if (found) return found;
+    await run(tab.id, () => { window.scrollBy(0, Math.max(700, window.innerHeight * 0.8)); return true; });
+    await sleep(900);
+  }
+  return null;
+}
+
+async function findInstagramPostUrl(text) {
+  const needle = verificationNeedle(text);
+  if (!needle) return null;
+  const tab = await openOrReuse('https://www.instagram.com/ihud.shoham/');
+  await sleep(900);
+  const candidates = await run(tab.id, () => [...new Set([...document.querySelectorAll('a[href*="/p/"]')]
+    .map((link) => link.href))].slice(0, 6));
+  for (const candidate of candidates || []) {
+    await chrome.tabs.update(tab.id, { url: candidate, active: true });
+    await waitForTab(tab.id);
+    await sleep(700);
+    const matches = await run(tab.id, (expected) => String(document.body.innerText || '')
+      .replace(/\s+/g, ' ').includes(expected), [needle]);
+    if (matches) {
+      const url = new URL(candidate);
+      return `${url.origin}${url.pathname}`;
+    }
+  }
+  return null;
+}
+
+async function verifiedPublishedUrl(payload) {
+  return payload.channel === 'facebook'
+    ? findFacebookPostUrl(payload.text)
+    : findInstagramPostUrl(payload.text);
+}
+
+function externalIdFromUrl(channel, url) {
+  const match = channel === 'facebook' ? String(url).match(/\/posts\/(\d+)/) : String(url).match(/\/p\/([^/]+)/);
+  return match?.[1] || null;
+}
+
 async function prepareMetaPost(payload) {
+  if (payload.live && payload.verifyExisting) {
+    const existingUrl = await verifiedPublishedUrl(payload);
+    if (existingUrl) return { published: true, recovered: true, id: externalIdFromUrl(payload.channel, existingUrl), url: existingUrl };
+  }
   const query = new URLSearchParams({ business_id: payload.businessId, asset_id: payload.pageId });
   const tab = await openOrReuse(`https://business.facebook.com/latest/composer/?${query}`);
   const configured = await run(tab.id, async (channel) => {
@@ -263,12 +332,16 @@ async function prepareMetaPost(payload) {
     return true;
   });
   if (!published) throw new Error('meta_publish_button_missing');
-  await sleep(3500);
-  return { published: true, url: tab.url || location.href, ...await run(tab.id, composerSnapshot) };
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    await sleep(attempt ? 5_000 : 3_500);
+    const url = await verifiedPublishedUrl(payload);
+    if (url) return { published: true, id: externalIdFromUrl(payload.channel, url), url };
+  }
+  throw new Error('meta_public_url_not_verified');
 }
 
 async function execute(command) {
-  if (command.type === 'health') return { ok: true, version: chrome.runtime.getManifest().version, build: '2026-11-07.3' };
+  if (command.type === 'health') return { ok: true, version: chrome.runtime.getManifest().version, build: '2026-11-08.1' };
   if (command.type === 'syncGooglePhotos') return syncGooglePhotos(command.payload || {});
   if (command.type === 'prepareMetaPost' || command.type === 'publishMeta') return prepareMetaPost({ ...command.payload, commandId: command.id, live: command.type === 'publishMeta' });
   throw new Error(`unknown_command:${command.type}`);

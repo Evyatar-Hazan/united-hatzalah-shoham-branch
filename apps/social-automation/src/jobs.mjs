@@ -28,10 +28,10 @@ function runCommand(command, input) {
   });
 }
 
-function queueOutbox(db, key, body, now, entityType = null, entityId = null) {
+function queueOutbox(db, key, body, now, entityType = null, entityId = null, mediaPath = null) {
   db.prepare(`INSERT OR IGNORE INTO outbox
-    (dedupe_key,kind,body,entity_type,entity_id,status,created_at)
-    VALUES(?,'text',?,?,?,'pending',?)`).run(key, body, entityType, entityId, nowIso(now));
+    (dedupe_key,kind,body,media_path,entity_type,entity_id,status,created_at)
+    VALUES(?,?,?,?,?,?,'pending',?)`).run(key, mediaPath ? 'media' : 'text', body, mediaPath, entityType, entityId, nowIso(now));
 }
 
 function chooseMedia(db, now) {
@@ -40,26 +40,55 @@ function chooseMedia(db, now) {
     WHERE last_used_at IS NULL OR last_used_at<? ORDER BY COALESCE(last_used_at,'') ASC LIMIT 1`).get(cutoff);
 }
 
-async function runMorningJob(db, config, job, now) {
+async function runMorningJob(db, config, services, job, now) {
   const media = chooseMedia(db, now);
   if (!media) {
     queueOutbox(db, `${job.job_key}:missing-media`, 'לא מצאתי כרגע נכס מדיה מסונכרן מהמקורות המאושרים. אמשיך לבדוק; אם תרצו פוסט מסוים, שלחו כאן תמונה וטקסט.', now);
     return { status: 'waiting', error: 'approved_media_catalog_empty' };
   }
-  const publicId = `M${now.toISOString().slice(0, 10).replaceAll('-', '')}`;
+  const jobDate = String(job.job_key).match(/^morning:(\d{4}-\d{2}-\d{2})$/)?.[1] || now.toISOString().slice(0, 10);
+  const publicId = `M${jobDate.replaceAll('-', '')}`;
   const brief = `הצעת בוקר המבוססת על נכס מאושר: ${media.media_key}`;
-  const postResult = db.prepare(`INSERT INTO posts
-    (public_id,status,source_kind,brief,media_json,created_at,updated_at,expires_at)
-    VALUES(?,'awaiting_approval','morning',?,?,?,?,?)`)
-    .run(publicId, brief, JSON.stringify([{ key: media.media_key, path: JSON.parse(media.metadata_json).path || null }]), nowIso(now), nowIso(now), new Date(now.getTime() + 72 * 60 * 60 * 1000).toISOString());
-  const postId = Number(postResult.lastInsertRowid);
-  const copy = await generateCopy(config, 'הבוקר אנחנו מזכירים שהמוכנות שלנו מתחילה באנשים, באימונים ובציוד שמחכה לרגע האמת.');
-  const draftResult = db.prepare(`INSERT INTO drafts
-    (post_id,version,facebook_text,instagram_text,media_json,fingerprint,status,created_at)
-    VALUES(?,1,?,?,?,?,'pending',?)`)
-    .run(postId, copy.facebook, copy.instagram, JSON.stringify([{ key: media.media_key }]), media.media_key, nowIso(now));
-  const draftId = Number(draftResult.lastInsertRowid);
-  queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}\n\nלאישור השיבו ישירות: מאשר / מאשר לפייסבוק / מאשר לאינסטגרם`, now, 'draft', draftId);
+  const existing = db.prepare(`SELECT p.id AS post_id,d.id AS draft_id,d.facebook_text,d.instagram_text,d.media_json
+    FROM posts p LEFT JOIN drafts d ON d.post_id=p.id AND d.status='pending'
+    WHERE p.public_id=? ORDER BY d.version DESC LIMIT 1`).get(publicId);
+  if (existing?.draft_id) {
+    const draftMedia = JSON.parse(existing.media_json || '[]');
+    queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${existing.facebook_text}\n\nאינסטגרם:\n${existing.instagram_text}\n\nלאישור השיבו ישירות: מאשר / מאשר לפייסבוק / מאשר לאינסטגרם`, now, 'draft', existing.draft_id, draftMedia[0]?.path || null);
+    return { status: 'done' };
+  }
+  const generate = services.generateCopy || generateCopy;
+  const copy = await generate(config, 'הבוקר אנחנו מזכירים שהמוכנות שלנו מתחילה באנשים, באימונים ובציוד שמחכה לרגע האמת.');
+  const metadata = JSON.parse(media.metadata_json || '{}');
+  const mediaItem = { key: media.media_key, ...metadata, source: metadata.source || media.source };
+  const mediaJson = JSON.stringify([mediaItem]);
+  let postId = existing?.post_id || null;
+  let draftId;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (postId) {
+      db.prepare(`UPDATE posts SET status='awaiting_approval',brief=?,media_json=?,updated_at=?,expires_at=? WHERE id=?`)
+        .run(brief, mediaJson, nowIso(now), new Date(now.getTime() + 72 * 60 * 60 * 1000).toISOString(), postId);
+    } else {
+      const postResult = db.prepare(`INSERT INTO posts
+        (public_id,status,source_kind,brief,media_json,created_at,updated_at,expires_at)
+        VALUES(?,'awaiting_approval','morning',?,?,?,?,?)`)
+        .run(publicId, brief, mediaJson, nowIso(now), nowIso(now), new Date(now.getTime() + 72 * 60 * 60 * 1000).toISOString());
+      postId = Number(postResult.lastInsertRowid);
+    }
+    const draftResult = db.prepare(`INSERT INTO drafts
+      (post_id,version,facebook_text,instagram_text,media_json,fingerprint,status,created_at)
+      VALUES(?,1,?,?,?,?,'pending',?)`)
+      .run(postId, copy.facebook, copy.instagram, mediaJson, media.media_key, nowIso(now));
+    draftId = Number(draftResult.lastInsertRowid);
+    queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}\n\nלאישור השיבו ישירות: מאשר / מאשר לפייסבוק / מאשר לאינסטגרם`, now, 'draft', draftId, mediaItem.path || null);
+    db.prepare('UPDATE media_usage SET last_used_at=?,post_id=? WHERE media_key=?')
+      .run(nowIso(now), postId, media.media_key);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
   return { status: 'done' };
 }
 
@@ -81,7 +110,8 @@ async function runMediaSyncJob(db, config, services, job, now) {
       .run(item.key, item.source || `google-photos:${item.album}`, JSON.stringify(prepared));
     imported += 1;
   }
-  return { status: imported ? 'done' : 'failed', error: imported ? null : 'no_approved_media_imported' };
+  const available = db.prepare('SELECT COUNT(*) AS count FROM media_usage').get().count;
+  return { status: imported || available ? 'done' : 'failed', error: imported || available ? null : 'no_approved_media_imported' };
 }
 
 function runWeeklyReport(db, job, now) {
@@ -117,6 +147,7 @@ async function runPublishJob(db, config, services, job, payload, now) {
       businessId: config.metaBusinessId,
       pageId: config.metaPageId,
       approvalFingerprint: draft.fingerprint,
+      verifyExisting: job.attempts > 0,
     }, { timeoutMs: 120_000 });
   } else {
     return { status: 'failed', error: 'meta_publisher_unavailable' };
@@ -124,6 +155,11 @@ async function runPublishJob(db, config, services, job, payload, now) {
   if (!receipt.url) throw new Error('publisher did not return a verified URL');
   db.prepare("UPDATE publications SET status='published', attempts=attempts+1, external_id=?, url=?, last_error=NULL, updated_at=? WHERE id=?")
     .run(receipt.id || null, receipt.url, nowIso(now), publication.id);
+  const incomplete = db.prepare("SELECT COUNT(*) AS count FROM publications WHERE draft_id=? AND status!='published'").get(draft.id).count;
+  if (!incomplete) {
+    db.prepare("UPDATE drafts SET status='published' WHERE id=?").run(draft.id);
+    db.prepare("UPDATE posts SET status='published',updated_at=? WHERE id=?").run(nowIso(now), draft.post_id);
+  }
   queueOutbox(db, `${job.job_key}:published`, `הפרסום ב־${payload.channel} הושלם ואומת:\n${receipt.url}`, now);
   return { status: 'done' };
 }
@@ -136,7 +172,7 @@ export async function processJobs(db, config, now = new Date(), limit = 20, serv
     try {
       const payload = JSON.parse(job.payload_json);
       let result;
-      if (job.kind === 'morning_proposal') result = await runMorningJob(db, config, job, now);
+      if (job.kind === 'morning_proposal') result = await runMorningJob(db, config, services, job, now);
       else if (job.kind === 'media_sync') result = await runMediaSyncJob(db, config, services, job, now);
       else if (job.kind === 'weekly_report') result = runWeeklyReport(db, job, now);
       else if (job.kind === 'publish') result = await runPublishJob(db, config, services, job, payload, now);

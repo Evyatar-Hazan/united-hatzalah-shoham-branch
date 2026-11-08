@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Shoham Social Local Bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local-only bridge for the approved Shoham social workflow.",
   "permissions": ["tabs", "scripting", "storage", "alarms"],
   "host_permissions": [
