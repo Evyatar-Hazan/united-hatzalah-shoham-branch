@@ -17,7 +17,7 @@ const INTENTS = new Set([
   'clarification',
 ]);
 
-export function runCodexStructured(config, prompt, schemaPath = SCHEMA_PATH, timeoutMs = 60_000) {
+export function runCodexStructured(config, prompt, schemaPath = SCHEMA_PATH, timeoutMs = 60_000, imagePaths = []) {
   return new Promise((resolve, reject) => {
     const runDir = mkdtempSync(join(tmpdir(), 'shoham-codex-router-'));
     const outputPath = join(runDir, 'decision.json');
@@ -28,7 +28,7 @@ export function runCodexStructured(config, prompt, schemaPath = SCHEMA_PATH, tim
       rmSync(runDir, { recursive: true, force: true });
       callback();
     };
-    const child = spawn(config.codexCommand, [
+    const args = [
       'exec',
       '--ephemeral',
       '--ignore-user-config',
@@ -38,10 +38,10 @@ export function runCodexStructured(config, prompt, schemaPath = SCHEMA_PATH, tim
       '-c', 'approval_policy="never"',
       '--output-schema', schemaPath,
       '--output-last-message', outputPath,
-      '--color', 'never',
-      '--cd', runDir,
-      prompt,
-    ], { stdio: ['ignore', 'ignore', 'pipe'], env: process.env });
+    ];
+    for (const imagePath of imagePaths.filter(Boolean)) args.push('--image', imagePath);
+    args.push('--color', 'never', '--cd', runDir, prompt);
+    const child = spawn(config.codexCommand, args, { stdio: ['ignore', 'ignore', 'pipe'], env: process.env });
     let stderr = '';
     const timer = setTimeout(() => {
       child.kill('SIGTERM');

@@ -307,27 +307,6 @@ test('daily proposal is idempotent, includes media, and completes both publicati
   } finally { f.close(); }
 });
 
-test('daily proposal uses a conservative copy fallback when Codex times out', async () => {
-  const f = fixture();
-  try {
-    const now = new Date('2026-11-09T10:30:00.000Z');
-    f.db.prepare('INSERT INTO media_usage(media_key,source,metadata_json) VALUES(?,?,?)')
-      .run('approved-photo', 'google-photos:approved', JSON.stringify({ path: '/approved.jpg' }));
-    scheduleDueWork(f.db, now);
-    f.db.prepare("UPDATE jobs SET status='done' WHERE kind='media_sync'").run();
-    const result = await processJobs(f.db, f.config, now, 20, {
-      generateCopy: async () => { throw new Error('semantic_router_timeout'); },
-    });
-    assert.equal(result[0].status, 'done');
-    assert.equal(result[0].warning, 'copy_fallback:semantic_router_timeout');
-    const draft = f.db.prepare('SELECT * FROM drafts').get();
-    assert.match(draft.facebook_text, /איחוד הצלה שוהם והמושבים/);
-    assert.match(draft.instagram_text, /🧡/u);
-    const outbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
-    assert.equal(outbox.media_path, '/approved.jpg');
-  } finally { f.close(); }
-});
-
 test('a partial morning post is resumed instead of inserted twice', async () => {
   const f = fixture();
   try {

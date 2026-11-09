@@ -40,19 +40,6 @@ function chooseMedia(db, now) {
     WHERE last_used_at IS NULL OR last_used_at<? ORDER BY COALESCE(last_used_at,'') ASC LIMIT 1`).get(cutoff);
 }
 
-function conservativeMorningCopy() {
-  return {
-    facebook: 'מתנדבות ומתנדבי איחוד הצלה שוהם והמושבים כאן למען הקהילה. תודה לכל מי שמתנדב, מתאמן ומוכן לסייע כשצריך. 🧡',
-    instagram: 'כאן למען הקהילה 🧡\nתודה למתנדבות ולמתנדבים של איחוד הצלה שוהם והמושבים.\n\n#איחודהצלה #שוהם #המושבים #קהילה',
-    generator: 'conservative-fallback',
-  };
-}
-
-function isRecoverableCopyError(error) {
-  return /^(?:semantic_router_timeout|semantic_router_exit_|codex_(?:copy_not_grounded|json_missing|copy_invalid|copy_out_of_bounds|invented_number))/
-    .test(String(error?.message || error));
-}
-
 async function runMorningJob(db, config, services, job, now) {
   const media = chooseMedia(db, now);
   if (!media) {
@@ -71,21 +58,13 @@ async function runMorningJob(db, config, services, job, now) {
     return { status: 'done' };
   }
   const generate = services.generateCopy || generateCopy;
-  let copy;
-  let copyWarning = null;
-  try {
-    copy = await generate(
-      config,
-      'מתנדבות ומתנדבי איחוד הצלה שוהם והמושבים כאן למען הקהילה. הם מתאמנים ומוכנים לסייע כשצריך. אפשר להודות להם בנוסח קהילתי, חם ומקצועי, בלי לתאר אירוע מסוים ובלי להוסיף עובדות, שמות או מספרים.',
-      { timeoutMs: 120_000 },
-    );
-  } catch (error) {
-    if (!isRecoverableCopyError(error)) throw error;
-    copy = conservativeMorningCopy();
-    copyWarning = `copy_fallback:${String(error.message || error)}`;
-  }
   const metadata = JSON.parse(media.metadata_json || '{}');
   const mediaItem = { key: media.media_key, ...metadata, source: metadata.source || media.source };
+  const copy = await generate(
+    config,
+    'הכן הצעת בוקר חיה שמבוססת על מה שנראה בתמונה המאושרת. התייחס רק לפרטים חזותיים ברורים, בלי להמציא את שם האירוע, מועד, אנשים או תוצאה. המסר צריך להיות קשור ישירות לתמונה ולא להיות פוסט כללי על התנדבות.',
+    { timeoutMs: 120_000, imagePaths: mediaItem.path ? [mediaItem.path] : [] },
+  );
   const mediaJson = JSON.stringify([mediaItem]);
   let postId = existing?.post_id || null;
   let draftId;
@@ -114,7 +93,7 @@ async function runMorningJob(db, config, services, job, now) {
     db.exec('ROLLBACK');
     throw error;
   }
-  return { status: 'done', warning: copyWarning };
+  return { status: 'done' };
 }
 
 async function runMediaSyncJob(db, config, services, job, now) {
@@ -203,7 +182,7 @@ export async function processJobs(db, config, now = new Date(), limit = 20, serv
       else if (job.kind === 'publish') result = await runPublishJob(db, config, services, job, payload, now);
       else result = { status: 'failed', error: 'unknown_job_kind' };
       db.prepare('UPDATE jobs SET status=?, last_error=?, updated_at=? WHERE id=?')
-        .run(result.status, result.error || result.warning || null, nowIso(now), job.id);
+        .run(result.status, result.error || null, nowIso(now), job.id);
       results.push({ id: job.id, kind: job.kind, ...result });
     } catch (error) {
       const status = job.attempts + 1 >= 3 ? 'failed' : 'pending';

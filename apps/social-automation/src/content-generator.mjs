@@ -12,11 +12,11 @@ function tokens(value) {
   return String(value).replace(/[#\p{P}\p{S}\d_]+/gu, ' ').split(/\s+/).map((word) => word.trim()).filter((word) => word.length > 2 && !STOP_WORDS.has(word));
 }
 
-function assertGrounded(output, source) {
+function assertGrounded(output, source, maxNovelRatio = 0.35) {
   const sourceTokens = new Set(tokens(source));
   const candidates = tokens(output).filter((word) => !SAFE_GENERIC.has(word));
   const novel = candidates.filter((word) => !sourceTokens.has(word) && ![...sourceTokens].some((sourceWord) => word.includes(sourceWord) || sourceWord.includes(word)));
-  if (candidates.length && novel.length / candidates.length > 0.35) throw new Error('codex_copy_not_grounded');
+  if (candidates.length && novel.length / candidates.length > maxNovelRatio) throw new Error('codex_copy_not_grounded');
 }
 
 function extractJson(value) {
@@ -27,7 +27,7 @@ function extractJson(value) {
   return JSON.parse(text.slice(start, end + 1));
 }
 
-function validateCopy(value, brief) {
+function validateCopy(value, brief, visualFacts = [], imageRequired = false) {
   if (!value || typeof value.facebook !== 'string' || typeof value.instagram !== 'string') throw new Error('codex_copy_invalid');
   const facebook = value.facebook.trim();
   const instagram = value.instagram.trim();
@@ -35,23 +35,35 @@ function validateCopy(value, brief) {
   const sourceDigits = new Set(String(brief).match(/\d+/g) || []);
   const outputDigits = [...new Set(`${facebook} ${instagram}`.match(/\d+/g) || [])];
   if (outputDigits.some((number) => !sourceDigits.has(number))) throw new Error('codex_invented_number');
-  assertGrounded(`${facebook}\n${instagram}`, brief);
+  const groundingSource = [brief, ...visualFacts].join('\n');
+  assertGrounded(`${facebook}\n${instagram}`, groundingSource, imageRequired ? 0.65 : 0.35);
+  if (imageRequired) {
+    const factTokens = tokens(visualFacts.join(' '));
+    const copyTokens = tokens(`${facebook} ${instagram}`);
+    const overlap = factTokens.filter((fact) => copyTokens.some((word) => word.includes(fact) || fact.includes(word)));
+    if (new Set(overlap).size < 2) throw new Error('codex_copy_not_image_specific');
+  }
   return { facebook, instagram };
 }
 
-export async function generateCopy(config, brief, { timeoutMs = 45_000, runModel = null } = {}) {
+export async function generateCopy(config, brief, { timeoutMs = 45_000, runModel = null, imagePaths = [] } = {}) {
   const clean = normalize(brief);
   if (!clean) throw new Error('codex_copy_source_missing');
-  const prompt = `אתה Codex, שכבת החשיבה והעריכה של מערכת הסושיאל של איחוד הצלה שוהם והמושבים. Hermes הוא גשר תעבורה בלבד. החזר JSON בלבד עם המפתחות facebook, instagram, clarification. אל תמציא עובדות, שמות, מספרים, אבחנות, תוצאות, קישורים או קרדיטים. שמור על משמעות המקור. אם חסר פרט מהותי או שהמקור כולל מידע רגיש, כתוב שאלה קצרה ב-clarification ואל תשלים את הפרט. נסח בעברית חמה, אנושית, קהילתית ומקצועית, בלי סנסציוניות ובלי מראה של טקסט AI. פייסבוק עד 180 מילים. אינסטגרם עד 120 מילים, 1-4 אימוג'ים ו-3-6 האשטגים רלוונטיים.\nמקור מאושר:\n${clean}`;
+  const hasImages = imagePaths.some(Boolean);
+  const prompt = `אתה Codex, שכבת החשיבה והעריכה של מערכת הסושיאל של איחוד הצלה שוהם והמושבים. Hermes הוא גשר תעבורה בלבד. החזר JSON בלבד עם המפתחות facebook, instagram, clarification, visualFacts. אל תמציא עובדות, שמות, מספרים, אבחנות, תוצאות, קישורים או קרדיטים. שמור על משמעות המקור. אם צורפה תמונה, כתוב ב-visualFacts בין 2 ל-5 פרטים חזותיים שנראים בה בבירור בלבד, בלי לזהות אנשים ובלי להסיק אירוע שלא הוכח. התחל את הטקסט בפרט מוחשי מהתמונה וקשר אליו את המסר; אל תכתוב פוסט גנרי על התנדבות או מתנדבים. אם אין מספיק הקשר חזותי או שחסר פרט מהותי, כתוב שאלה קצרה ב-clarification ואל תשלים את הפרט. נסח בעברית חיה, טבעית, קהילתית ומקצועית, בלי סנסציוניות ובלי מראה של טקסט AI. פייסבוק עד 180 מילים. אינסטגרם עד 120 מילים, 1-4 אימוג'ים ו-3-6 האשטגים רלוונטיים.\nמקור מאושר:\n${clean}`;
   const raw = runModel
     ? await runModel(prompt)
-    : await runCodexStructured(config, prompt, COPY_SCHEMA_PATH, timeoutMs);
+    : await runCodexStructured(config, prompt, COPY_SCHEMA_PATH, timeoutMs, imagePaths);
   const parsed = extractJson(raw);
-  const copy = validateCopy(parsed, clean);
+  const visualFacts = Array.isArray(parsed.visualFacts)
+    ? parsed.visualFacts.map((fact) => normalize(fact)).filter(Boolean).slice(0, 5)
+    : [];
+  if (hasImages && visualFacts.length < 2) throw new Error('codex_visual_context_missing');
+  const copy = validateCopy(parsed, clean, visualFacts, hasImages);
   const clarification = typeof parsed.clarification === 'string' && parsed.clarification.trim()
     ? parsed.clarification.trim()
     : FACT_RISK.test(clean) ? 'הטקסט כולל מידע רגיש או עובדתי. יש לאמת אותו בקבוצה לפני פרסום.' : null;
-  return { ...copy, clarification, generator: 'codex' };
+  return { ...copy, clarification, visualFacts, generator: 'codex' };
 }
 
 export async function enhanceDraft(db, config, draftId, options = {}) {
