@@ -53,7 +53,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>Label</key><string>org.ihud-shoham.social-automation</string>
   <key>ProgramArguments</key><array><string>${runnerPath}</string></array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
   <key>WorkingDirectory</key><string>${projectRoot}</string>
   <key>StandardOutPath</key><string>${join(logsDir, 'worker.log')}</string>

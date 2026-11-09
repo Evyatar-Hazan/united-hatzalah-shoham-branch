@@ -4,6 +4,8 @@ import { getSetting, nowIso, setSetting } from './database.mjs';
 import { isLatestDraftQuery, isRevisionText } from './intent.mjs';
 
 const DAY = 24 * 60 * 60 * 1000;
+const MORNING_RETRY_COOLDOWN = 15 * 60 * 1000;
+const STALE_JOB_TIMEOUT = 10 * 60 * 1000;
 
 function enqueue(db, { dedupeKey, body, mediaPath = null, replyToId = null, entityType = null, entityId = null }, now) {
   db.prepare(`INSERT OR IGNORE INTO outbox
@@ -333,6 +335,17 @@ export function scheduleDueWork(db, now = new Date()) {
     const key = `morning:${date}`;
     db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
       VALUES(?,'morning_proposal','{}','pending',?,?,?)`).run(key, nowIso(now), nowIso(now), nowIso(now));
+    const existing = db.prepare('SELECT status,attempts,updated_at FROM jobs WHERE job_key=?').get(key);
+    const updatedAt = new Date(existing?.updated_at || 0).getTime();
+    const failedRetryDue = existing?.status === 'failed'
+      && now.getTime() - updatedAt >= MORNING_RETRY_COOLDOWN;
+    const staleRunning = existing?.status === 'running'
+      && now.getTime() - updatedAt >= STALE_JOB_TIMEOUT;
+    if (failedRetryDue || staleRunning) {
+      db.prepare(`UPDATE jobs
+        SET status='pending',attempts=0,last_error=NULL,run_after=?,updated_at=?
+        WHERE job_key=?`).run(nowIso(now), nowIso(now), key);
+    }
   }
   if (weekday === 'Sun' && minutes >= 1080) {
     const weekKey = `weekly:${date}`;

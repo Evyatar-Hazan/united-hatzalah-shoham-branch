@@ -211,6 +211,39 @@ test('missed morning times create only one current proposal job', () => {
   } finally { f.close(); }
 });
 
+test('a failed morning job is rearmed after the computer wakes later', () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-09T10:30:00.000Z');
+    const failedAt = new Date(now.getTime() - 20 * 60_000).toISOString();
+    f.db.prepare(`INSERT INTO jobs
+      (job_key,kind,payload_json,status,attempts,run_after,last_error,created_at,updated_at)
+      VALUES('morning:2026-11-09','morning_proposal','{}','failed',3,?,'semantic_router_timeout',?,?)`)
+      .run(failedAt, failedAt, failedAt);
+    scheduleDueWork(f.db, now);
+    const job = f.db.prepare("SELECT * FROM jobs WHERE job_key='morning:2026-11-09'").get();
+    assert.equal(job.status, 'pending');
+    assert.equal(job.attempts, 0);
+    assert.equal(job.last_error, null);
+  } finally { f.close(); }
+});
+
+test('a recent failed morning job is not rearmed in a tight loop', () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-09T10:30:00.000Z');
+    const failedAt = new Date(now.getTime() - 5 * 60_000).toISOString();
+    f.db.prepare(`INSERT INTO jobs
+      (job_key,kind,payload_json,status,attempts,run_after,last_error,created_at,updated_at)
+      VALUES('morning:2026-11-09','morning_proposal','{}','failed',3,?,'semantic_router_timeout',?,?)`)
+      .run(failedAt, failedAt, failedAt);
+    scheduleDueWork(f.db, now);
+    const job = f.db.prepare("SELECT * FROM jobs WHERE job_key='morning:2026-11-09'").get();
+    assert.equal(job.status, 'failed');
+    assert.equal(job.attempts, 3);
+  } finally { f.close(); }
+});
+
 test('an orphaned morning post without a draft does not block the current proposal', () => {
   const f = fixture();
   try {
@@ -271,6 +304,27 @@ test('daily proposal is idempotent, includes media, and completes both publicati
     assert.equal(f.db.prepare('SELECT status FROM drafts WHERE id=?').get(draft.id).status, 'published');
     assert.equal(calls.length, 2);
     assert.ok(calls.every(({ type, payload }) => type === 'publishMeta' && payload.media[0].path === '/approved.jpg'));
+  } finally { f.close(); }
+});
+
+test('daily proposal uses a conservative copy fallback when Codex times out', async () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-09T10:30:00.000Z');
+    f.db.prepare('INSERT INTO media_usage(media_key,source,metadata_json) VALUES(?,?,?)')
+      .run('approved-photo', 'google-photos:approved', JSON.stringify({ path: '/approved.jpg' }));
+    scheduleDueWork(f.db, now);
+    f.db.prepare("UPDATE jobs SET status='done' WHERE kind='media_sync'").run();
+    const result = await processJobs(f.db, f.config, now, 20, {
+      generateCopy: async () => { throw new Error('semantic_router_timeout'); },
+    });
+    assert.equal(result[0].status, 'done');
+    assert.equal(result[0].warning, 'copy_fallback:semantic_router_timeout');
+    const draft = f.db.prepare('SELECT * FROM drafts').get();
+    assert.match(draft.facebook_text, /איחוד הצלה שוהם והמושבים/);
+    assert.match(draft.instagram_text, /🧡/u);
+    const outbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
+    assert.equal(outbox.media_path, '/approved.jpg');
   } finally { f.close(); }
 });
 
