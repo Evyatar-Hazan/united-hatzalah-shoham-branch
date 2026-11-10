@@ -33,7 +33,7 @@ test('content generator requires image-specific copy when an image is attached',
   const result = await generateCopy({}, 'הכן פוסט לפי התמונה.', {
     imagePaths: ['/approved.jpg'],
     runModel: async () => JSON.stringify({
-      facebook: 'שורה של תיקים כתומים מוכנים על השולחן — ציוד שמחכה לרגע שבו יצטרכו אותו.',
+      facebook: 'שורה של תיקים כתומים מוכנים על השולחן. ציוד שמחכה לרגע שבו יצטרכו אותו.',
       instagram: 'תיקים כתומים, מסודרים ומוכנים 🧡\n\n#איחודהצלה #שוהם #ציוד #קהילה',
       clarification: null,
       visualFacts: ['שורה של תיקים כתומים', 'התיקים מסודרים על שולחן', 'שלט של סניף שוהם'],
@@ -41,6 +41,18 @@ test('content generator requires image-specific copy when an image is attached',
   });
   assert.match(result.facebook, /תיקים כתומים/);
   assert.equal(result.visualFacts.length, 3);
+});
+
+test('content generator rejects long dashes in generated copy', async () => {
+  for (const longDash of ['\u2013', '\u2014']) {
+    await assert.rejects(() => generateCopy({}, 'תרגול מתנדבים בשוהם', {
+      runModel: async () => JSON.stringify({
+        facebook: `תרגול מתנדבים בשוהם ${longDash} הקהילה מוכנה.`,
+        instagram: 'תרגול מתנדבים בשוהם.\n#איחודהצלה #שוהם #קהילה',
+        clarification: null,
+      }),
+    }), /long_dash_forbidden/);
+  }
 });
 
 test('content generator rejects generic copy for an attached image', async () => {

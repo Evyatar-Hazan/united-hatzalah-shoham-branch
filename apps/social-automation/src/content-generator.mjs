@@ -5,6 +5,7 @@ import { runCodexStructured } from './semantic-router.mjs';
 const COPY_SCHEMA_PATH = fileURLToPath(new URL('./copy-decision.schema.json', import.meta.url));
 
 const FACT_RISK = /(נפצע|פצוע|הרוג|נהרג|מטופל|תאונה|זירה|אירוע רפואי|החייאה|תינוק|ילד|קטין|תרומה|₪|שקלים|מספר נפגעים)/;
+const LONG_DASH = /[\u2013\u2014]/u;
 const SAFE_GENERIC = new Set(['אנחנו', 'כאן', 'מוכנים', 'למען', 'הקהילה', 'קהילה', 'בשביל', 'איחוד', 'הצלה', 'איחודהצלה', 'שוהם', 'המושבים', 'תודה', 'למתנדבים', 'שלנו']);
 const STOP_WORDS = new Set(['את', 'של', 'על', 'עם', 'גם', 'כל', 'זה', 'זו', 'הם', 'הן', 'כי', 'אם', 'או', 'לא', 'יש', 'אל', 'מן', 'מה', 'כדי', 'לפי']);
 
@@ -32,6 +33,7 @@ function validateCopy(value, brief, visualFacts = [], imageRequired = false) {
   const facebook = value.facebook.trim();
   const instagram = value.instagram.trim();
   if (!facebook || !instagram || facebook.length > 1800 || instagram.length > 1200) throw new Error('codex_copy_out_of_bounds');
+  if (LONG_DASH.test(`${facebook}\n${instagram}`)) throw new Error('codex_long_dash_forbidden');
   const sourceDigits = new Set(String(brief).match(/\d+/g) || []);
   const outputDigits = [...new Set(`${facebook} ${instagram}`.match(/\d+/g) || [])];
   if (outputDigits.some((number) => !sourceDigits.has(number))) throw new Error('codex_invented_number');
@@ -50,7 +52,7 @@ export async function generateCopy(config, brief, { timeoutMs = 45_000, runModel
   const clean = normalize(brief);
   if (!clean) throw new Error('codex_copy_source_missing');
   const hasImages = imagePaths.some(Boolean);
-  const prompt = `אתה Codex, שכבת החשיבה והעריכה של מערכת הסושיאל של איחוד הצלה שוהם והמושבים. Hermes הוא גשר תעבורה בלבד. החזר JSON בלבד עם המפתחות facebook, instagram, clarification, visualFacts. אל תמציא עובדות, שמות, מספרים, אבחנות, תוצאות, קישורים או קרדיטים. שמור על משמעות המקור. אם צורפה תמונה, כתוב ב-visualFacts בין 2 ל-5 פרטים חזותיים שנראים בה בבירור בלבד, בלי לזהות אנשים ובלי להסיק אירוע שלא הוכח. התחל את הטקסט בפרט מוחשי מהתמונה וקשר אליו את המסר; אל תכתוב פוסט גנרי על התנדבות או מתנדבים. אם אין מספיק הקשר חזותי או שחסר פרט מהותי, כתוב שאלה קצרה ב-clarification ואל תשלים את הפרט. נסח בעברית חיה, טבעית, קהילתית ומקצועית, בלי סנסציוניות ובלי מראה של טקסט AI. פייסבוק עד 180 מילים. אינסטגרם עד 120 מילים, 1-4 אימוג'ים ו-3-6 האשטגים רלוונטיים.\nמקור מאושר:\n${clean}`;
+  const prompt = `אתה Codex, שכבת החשיבה והעריכה של מערכת הסושיאל של איחוד הצלה שוהם והמושבים. Hermes הוא גשר תעבורה בלבד. החזר JSON בלבד עם המפתחות facebook, instagram, clarification, visualFacts. אל תמציא עובדות, שמות, מספרים, אבחנות, תוצאות, קישורים או קרדיטים. שמור על משמעות המקור. אם צורפה תמונה, כתוב ב-visualFacts בין 2 ל-5 פרטים חזותיים שנראים בה בבירור בלבד, בלי לזהות אנשים ובלי להסיק אירוע שלא הוכח. התחל את הטקסט בפרט מוחשי מהתמונה וקשר אליו את המסר; אל תכתוב פוסט גנרי על התנדבות או מתנדבים. אם אין מספיק הקשר חזותי או שחסר פרט מהותי, כתוב שאלה קצרה ב-clarification ואל תשלים את הפרט. נסח בעברית חיה, טבעית, קהילתית ומקצועית, בלי סנסציוניות ובלי מראה של טקסט AI. אין להשתמש במקף ארוך. יש להשתמש בנקודה, בפסיק או בנקודתיים. פייסבוק עד 180 מילים. אינסטגרם עד 120 מילים, 1-4 אימוג'ים ו-3-6 האשטגים רלוונטיים.\nמקור מאושר:\n${clean}`;
   const raw = runModel
     ? await runModel(prompt)
     : await runCodexStructured(config, prompt, COPY_SCHEMA_PATH, timeoutMs, imagePaths);
