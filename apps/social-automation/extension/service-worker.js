@@ -301,7 +301,17 @@ async function prepareMetaPost(payload) {
     if (!response.ok) throw new Error('meta_media_fetch_failed');
     const blob = await response.blob();
     const uploaded = await run(tab.id, async (encoded, type, name) => {
-      const input = document.querySelector('input[type="file"]');
+      let input = document.querySelector('input[type="file"]');
+      if (!input) {
+        const uploadButton = [...document.querySelectorAll('button,[role="button"]')]
+          .find((element) => /Add photo\/video|הוספת תמונה|הוסף תמונה/i.test(element.innerText || element.getAttribute('aria-label') || ''));
+        uploadButton?.click();
+        const deadline = Date.now() + 5_000;
+        while (!input && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          input = document.querySelector('input[type="file"]');
+        }
+      }
       if (!input) return false;
       const binary = atob(encoded);
       const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
