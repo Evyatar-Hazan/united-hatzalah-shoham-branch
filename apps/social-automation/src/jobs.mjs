@@ -14,6 +14,16 @@ export const APPROVED_ALBUMS = [
   'ועידת ראשי סניפים 8.1.25 👍',
 ];
 export const EXCLUDED_ALBUMS = ['רגעים של אור (יומיים אחרונים במחנה חנוכה)'];
+const REMINDER_DELAY = 30 * 60 * 1000;
+
+function approvers(config) {
+  return config.approvers || [
+    { key: 'erez', name: 'ארז' },
+    { key: 'shlomi', name: 'שלומי' },
+    { key: 'dori', name: 'דורי' },
+    { key: 'shenhav', name: 'שנהב' },
+  ];
+}
 
 function runCommand(command, input) {
   return new Promise((resolve, reject) => {
@@ -28,16 +38,58 @@ function runCommand(command, input) {
   });
 }
 
-function queueOutbox(db, key, body, now, entityType = null, entityId = null, mediaPath = null) {
+function queueOutbox(db, key, body, now, entityType = null, entityId = null, mediaPath = null, targetChatId = null) {
   db.prepare(`INSERT OR IGNORE INTO outbox
-    (dedupe_key,kind,body,media_path,entity_type,entity_id,status,created_at)
-    VALUES(?,?,?,?,?,?,'pending',?)`).run(key, mediaPath ? 'media' : 'text', body, mediaPath, entityType, entityId, nowIso(now));
+    (dedupe_key,kind,body,media_path,entity_type,entity_id,target_chat_id,status,created_at)
+    VALUES(?,?,?,?,?,?,?,'pending',?)`).run(key, mediaPath ? 'media' : 'text', body, mediaPath, entityType, entityId, targetChatId, nowIso(now));
 }
 
 function chooseMedia(db, now) {
   const cutoff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
   return db.prepare(`SELECT * FROM media_usage
-    WHERE last_used_at IS NULL OR last_used_at<? ORDER BY COALESCE(last_used_at,'') ASC LIMIT 1`).get(cutoff);
+    WHERE last_used_at IS NULL OR last_used_at<? ORDER BY RANDOM() LIMIT 1`).get(cutoff);
+}
+
+function scheduleApprovalReminders(db, draftId, now) {
+  const groupAt = new Date(now.getTime() + REMINDER_DELAY);
+  const privateAt = new Date(now.getTime() + 2 * REMINDER_DELAY);
+  db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
+    VALUES(?,'approval_group_reminder',?,'pending',?,?,?)`)
+    .run(`approval-reminder:${draftId}:group`, JSON.stringify({ draftId }), nowIso(groupAt), nowIso(now), nowIso(now));
+  db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
+    VALUES(?,'approval_private_reminder',?,'pending',?,?,?)`)
+    .run(`approval-reminder:${draftId}:private:1`, JSON.stringify({ draftId, round: 1 }), nowIso(privateAt), nowIso(now), nowIso(now));
+}
+
+function approvalState(db, config, draftId) {
+  const draft = db.prepare(`SELECT d.*,p.public_id,p.status AS post_status FROM drafts d
+    JOIN posts p ON p.id=d.post_id WHERE d.id=?`).get(draftId);
+  if (!draft || draft.status !== 'pending' || draft.post_status !== 'awaiting_approval') return { active: false, draft, missing: [] };
+  const approved = new Set(db.prepare('SELECT approver_key FROM approvals WHERE draft_id=? AND approver_key IS NOT NULL').all(draftId).map((row) => row.approver_key));
+  return { active: true, draft, missing: approvers(config).filter((person) => !approved.has(person.key)) };
+}
+
+function runGroupApprovalReminder(db, config, payload, job, now) {
+  const state = approvalState(db, config, payload.draftId);
+  if (!state.active || !state.missing.length) return { status: 'done' };
+  queueOutbox(db, `${job.job_key}:message`, `תזכורת לאישור סקיצה ${state.draft.public_id}, גרסה ${state.draft.version}. ממתינים ל: ${state.missing.map((person) => person.name).join(', ')}. נא להשיב ישירות לסקיצה: מאשר`, now);
+  return { status: 'done' };
+}
+
+function runPrivateApprovalReminder(db, config, payload, job, now) {
+  const state = approvalState(db, config, payload.draftId);
+  if (!state.active || !state.missing.length) return { status: 'done' };
+  for (const person of state.missing) {
+    const identity = db.prepare('SELECT sender_id FROM approver_identities WHERE approver_key=?').get(person.key);
+    if (!identity?.sender_id) continue;
+    queueOutbox(db, `${job.job_key}:${person.key}`, `היי ${person.name}, סקיצה ${state.draft.public_id}, גרסה ${state.draft.version}, עדיין ממתינה לאישור שלך. אפשר לחזור לקבוצה ולהשיב ישירות לסקיצה: מאשר`, now, null, null, null, identity.sender_id);
+  }
+  const nextRound = Number(payload.round || 1) + 1;
+  const nextAt = new Date(now.getTime() + REMINDER_DELAY);
+  db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
+    VALUES(?,'approval_private_reminder',?,'pending',?,?,?)`)
+    .run(`approval-reminder:${payload.draftId}:private:${nextRound}`, JSON.stringify({ draftId: payload.draftId, round: nextRound }), nowIso(nextAt), nowIso(now), nowIso(now));
+  return { status: 'done' };
 }
 
 async function runMorningJob(db, config, services, job, now) {
@@ -54,7 +106,8 @@ async function runMorningJob(db, config, services, job, now) {
     WHERE p.public_id=? ORDER BY d.version DESC LIMIT 1`).get(publicId);
   if (existing?.draft_id) {
     const draftMedia = JSON.parse(existing.media_json || '[]');
-    queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${existing.facebook_text}\n\nאינסטגרם:\n${existing.instagram_text}\n\nלאישור השיבו ישירות: מאשר / מאשר לפייסבוק / מאשר לאינסטגרם`, now, 'draft', existing.draft_id, draftMedia[0]?.path || null);
+    queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${existing.facebook_text}\n\nאינסטגרם:\n${existing.instagram_text}\n\nנדרשים ארבעה אישורים על הגרסה הזו: ארז, שלומי, דורי ושנהב. כל אחד משיב ישירות לסקיצה: מאשר`, now, 'draft', existing.draft_id, draftMedia[0]?.path || null);
+    scheduleApprovalReminders(db, existing.draft_id, now);
     return { status: 'done' };
   }
   const generate = services.generateCopy || generateCopy;
@@ -85,7 +138,8 @@ async function runMorningJob(db, config, services, job, now) {
       VALUES(?,1,?,?,?,?,'pending',?)`)
       .run(postId, copy.facebook, copy.instagram, mediaJson, media.media_key, nowIso(now));
     draftId = Number(draftResult.lastInsertRowid);
-    queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}\n\nלאישור השיבו ישירות: מאשר / מאשר לפייסבוק / מאשר לאינסטגרם`, now, 'draft', draftId, mediaItem.path || null);
+    queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}\n\nנדרשים ארבעה אישורים על הגרסה הזו: ארז, שלומי, דורי ושנהב. כל אחד משיב ישירות לסקיצה: מאשר`, now, 'draft', draftId, mediaItem.path || null);
+    scheduleApprovalReminders(db, draftId, now);
     db.prepare('UPDATE media_usage SET last_used_at=?,post_id=? WHERE media_key=?')
       .run(nowIso(now), postId, media.media_key);
     db.exec('COMMIT');
@@ -180,6 +234,8 @@ export async function processJobs(db, config, now = new Date(), limit = 20, serv
       else if (job.kind === 'media_sync') result = await runMediaSyncJob(db, config, services, job, now);
       else if (job.kind === 'weekly_report') result = runWeeklyReport(db, job, now);
       else if (job.kind === 'publish') result = await runPublishJob(db, config, services, job, payload, now);
+      else if (job.kind === 'approval_group_reminder') result = runGroupApprovalReminder(db, config, payload, job, now);
+      else if (job.kind === 'approval_private_reminder') result = runPrivateApprovalReminder(db, config, payload, job, now);
       else result = { status: 'failed', error: 'unknown_job_kind' };
       db.prepare('UPDATE jobs SET status=?, last_error=?, updated_at=? WHERE id=?')
         .run(result.status, result.error || null, nowIso(now), job.id);

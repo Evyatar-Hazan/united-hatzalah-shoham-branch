@@ -8,11 +8,29 @@ import { ingestEvent, resolveApprovalClarification, scheduleDueWork } from '../s
 import { processJobs } from '../src/jobs.mjs';
 import { flushOutbox } from '../src/outbox.mjs';
 
+const APPROVERS = [
+  { key: 'erez', name: 'ארז', senderId: 'erez-id' },
+  { key: 'shlomi', name: 'שלומי', senderId: 'shlomi-id' },
+  { key: 'dori', name: 'דורי', senderId: 'dori-id' },
+  { key: 'shenhav', name: 'שנהב', senderId: 'shenhav-id' },
+];
+
 function fixture() {
   const dataDir = mkdtempSync(join(tmpdir(), 'shoham-social-'));
-  const config = { dataDir, dbPath: join(dataDir, 'db.sqlite'), mediaDir: join(dataDir, 'media'), groupId: 'group@g.us', ownerId: 'owner', dryRun: true, signature: 'signature', bridgeUrl: 'http://127.0.0.1:0', metaPublishCommand: '' };
+  const config = { dataDir, dbPath: join(dataDir, 'db.sqlite'), mediaDir: join(dataDir, 'media'), groupId: 'group@g.us', ownerId: 'owner', approvers: APPROVERS, dryRun: true, signature: 'signature', bridgeUrl: 'http://127.0.0.1:0', metaPublishCommand: '' };
   const db = openDatabase(config);
   return { db, config, close() { db.close(); rmSync(dataDir, { recursive: true, force: true }); } };
+}
+
+function approve(f, replyToId, prefix = 'approval', now = new Date()) {
+  return APPROVERS.map((person, index) => ingestEvent(f.db, f.config, {
+    id: `${prefix}-${person.key}`,
+    chatId: 'group@g.us',
+    senderId: person.senderId,
+    senderName: person.name,
+    text: 'מאשר',
+    replyToId,
+  }, new Date(now.getTime() + index * 1000)));
 }
 
 test('duplicate inbound messages are idempotent', () => {
@@ -25,16 +43,39 @@ test('duplicate inbound messages are idempotent', () => {
   } finally { f.close(); }
 });
 
-test('approval must reply to the active draft and queues both channels', () => {
+test('all four named approvers must approve the same draft before both channels are queued', () => {
   const f = fixture();
   try {
     ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'תרגול מתנדבים', media: [] });
     const outbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
     f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-message', outbox.id);
-    const result = ingestEvent(f.db, f.config, { id: 'm2', chatId: 'group@g.us', senderId: 'u2', text: 'מאשר', replyToId: 'draft-message' });
+    const results = APPROVERS.slice(0, 3).map((person) => ingestEvent(f.db, f.config, {
+      id: `approval-${person.key}`, chatId: 'group@g.us', senderId: person.senderId,
+      senderName: person.name, text: 'מאשר', replyToId: 'draft-message',
+    }));
+    assert.ok(results.every((result) => result.type === 'approval_recorded'));
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE kind='publish'").get().count, 0);
+    const last = APPROVERS[3];
+    const result = ingestEvent(f.db, f.config, {
+      id: `approval-${last.key}`, chatId: 'group@g.us', senderId: last.senderId,
+      senderName: last.name, text: 'מאשר', replyToId: 'draft-message',
+    });
     assert.equal(result.type, 'approved');
     assert.deepEqual(result.channels, ['facebook', 'instagram']);
     assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE kind='publish'").get().count, 2);
+  } finally { f.close(); }
+});
+
+test('the owner is not an approver and cannot advance the four-person gate', () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'תרגול מתנדבים', media: [] });
+    const outbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
+    f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-message', outbox.id);
+    const result = ingestEvent(f.db, f.config, { id: 'owner-approval', chatId: 'group@g.us', senderId: 'owner', senderName: 'אביתר', text: 'מאשר', replyToId: 'draft-message' });
+    assert.equal(result.type, 'approval_not_counted');
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM approvals').get().count, 0);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE kind='publish'").get().count, 0);
   } finally { f.close(); }
 });
 
@@ -62,11 +103,11 @@ test('a short yes confirms the exact draft named in the latest bot clarification
       replyToText: `סקיצה ${draft.public_id} · גרסה ${draft.version}`,
     });
     const result = ingestEvent(f.db, f.config, {
-      id: 'm3', chatId: 'group@g.us', senderId: 'u2', text: 'כן',
+      id: 'm3', chatId: 'group@g.us', senderId: 'erez-id', senderName: 'ארז', text: 'כן',
       replyToText: resolved.replyToText,
       semantic: { intent: 'approve_draft', confidence: 1, channels: resolved.channels },
     }, new Date(now.getTime() + 30_000));
-    assert.equal(result.type, 'approved');
+    assert.equal(result.type, 'approval_recorded');
   } finally { f.close(); }
 });
 
@@ -146,6 +187,56 @@ test('a targeted revision applies to the only active draft without a direct repl
   } finally { f.close(); }
 });
 
+test('a revised version resets every approval and requires a fresh four-person vote', () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [] });
+    const firstOutbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
+    f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-v1', firstOutbox.id);
+    const first = APPROVERS[0];
+    assert.equal(ingestEvent(f.db, f.config, {
+      id: 'approve-v1', chatId: 'group@g.us', senderId: first.senderId, senderName: first.name,
+      text: 'מאשר', replyToId: 'draft-v1',
+    }).type, 'approval_recorded');
+    const revision = ingestEvent(f.db, f.config, {
+      id: 'revise-v2', chatId: 'group@g.us', senderId: 'member', text: 'תקן את האימוג׳י ללב כתום',
+    });
+    assert.equal(revision.type, 'draft_revised');
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM approvals WHERE draft_id=?').get(revision.draftId).count, 0);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE kind='publish'").get().count, 0);
+  } finally { f.close(); }
+});
+
+test('pending approvers get one group reminder and then targeted Hermes reminders every thirty minutes', async () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-08T06:30:00.000Z');
+    for (const person of APPROVERS) {
+      ingestEvent(f.db, f.config, {
+        id: `learn-${person.key}`, chatId: 'group@g.us', senderId: person.senderId, senderName: person.name,
+        text: 'הודעת קבוצה', semantic: { intent: 'group_conversation', confidence: 1 },
+      }, now);
+    }
+    ingestEvent(f.db, f.config, { id: 'draft', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [] }, now);
+    const draftOutbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
+    f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-message', draftOutbox.id);
+    const first = APPROVERS[0];
+    ingestEvent(f.db, f.config, {
+      id: 'approve-one', chatId: 'group@g.us', senderId: first.senderId, senderName: first.name,
+      text: 'מאשר', replyToId: 'draft-message',
+    }, new Date(now.getTime() + 1000));
+    await processJobs(f.db, f.config, new Date(now.getTime() + 31 * 60_000));
+    const groupReminder = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:group:message'").get();
+    assert.match(groupReminder.body, /שלומי, דורי, שנהב/);
+    assert.equal(groupReminder.target_chat_id, null);
+    await processJobs(f.db, f.config, new Date(now.getTime() + 61 * 60_000));
+    const privateRows = f.db.prepare("SELECT target_chat_id FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' ORDER BY target_chat_id").all();
+    assert.deepEqual(privateRows.map((row) => row.target_chat_id), ['dori-id', 'shenhav-id', 'shlomi-id']);
+    const next = f.db.prepare("SELECT * FROM jobs WHERE job_key LIKE 'approval-reminder:%:private:2'").get();
+    assert.ok(next);
+  } finally { f.close(); }
+});
+
 test('image replacement chooses a different approved asset and keeps the existing copy', () => {
   const f = fixture();
   try {
@@ -208,6 +299,23 @@ test('missed morning times create only one current proposal job', () => {
     scheduleDueWork(f.db, now);
     scheduleDueWork(f.db, new Date(now.getTime() + 3 * 60 * 60 * 1000));
     assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE kind='morning_proposal'").get().count, 1);
+  } finally { f.close(); }
+});
+
+test('an older pending morning draft never blocks the next workday proposal', () => {
+  const f = fixture();
+  try {
+    const sunday = new Date('2026-11-08T08:00:00.000Z');
+    scheduleDueWork(f.db, sunday);
+    f.db.prepare(`INSERT INTO posts
+      (public_id,status,source_kind,brief,media_json,created_at,updated_at)
+      VALUES('M20261108','awaiting_approval','morning','','[]',?,?)`).run(sunday.toISOString(), sunday.toISOString());
+    const post = f.db.prepare("SELECT id FROM posts WHERE public_id='M20261108'").get();
+    f.db.prepare(`INSERT INTO drafts
+      (post_id,version,facebook_text,instagram_text,media_json,fingerprint,status,created_at)
+      VALUES(?,1,'פייסבוק','אינסטגרם','[]','old','pending',?)`).run(post.id, sunday.toISOString());
+    scheduleDueWork(f.db, new Date('2026-11-09T08:00:00.000Z'));
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE kind='morning_proposal'").get().count, 2);
   } finally { f.close(); }
 });
 
@@ -282,10 +390,8 @@ test('daily proposal is idempotent, includes media, and completes both publicati
     assert.equal(f.db.prepare("SELECT post_id FROM media_usage WHERE media_key='approved-photo'").get().post_id, post.id);
 
     f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('morning-draft-message', proposal.id);
-    const approval = ingestEvent(f.db, f.config, {
-      id: 'approve-morning', chatId: 'group@g.us', senderId: 'member', text: 'מאשר', replyToId: 'morning-draft-message',
-    }, new Date(now.getTime() + 60_000));
-    assert.equal(approval.type, 'approved');
+    const approvals = approve(f, 'morning-draft-message', 'morning-approval', new Date(now.getTime() + 60_000));
+    assert.equal(approvals[3].type, 'approved');
     f.config.metaDryRun = false;
     const calls = [];
     const browserBridge = {
@@ -334,8 +440,8 @@ test('dry-run publication never invokes an external publisher', async () => {
     ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'תרגול', media: [] });
     const outbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
     f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-message', outbox.id);
-    ingestEvent(f.db, f.config, { id: 'm2', chatId: 'group@g.us', senderId: 'u2', text: 'מאשר לפייסבוק', replyToId: 'draft-message' });
-    const results = await processJobs(f.db, f.config);
+    approve(f, 'draft-message', 'dry-run-approval');
+    const results = await processJobs(f.db, f.config, new Date(Date.now() + 10_000));
     assert.equal(results[0].status, 'done');
     assert.equal(f.db.prepare('SELECT status FROM publications').get().status, 'dry_run');
   } finally { f.close(); }

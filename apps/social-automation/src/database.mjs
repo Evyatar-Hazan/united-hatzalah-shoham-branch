@@ -56,6 +56,12 @@ CREATE TABLE IF NOT EXISTS approvals (
   channels TEXT NOT NULL,
   approved_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS approver_identities (
+  approver_key TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  sender_id TEXT NOT NULL UNIQUE,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS publications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   draft_id INTEGER NOT NULL REFERENCES drafts(id),
@@ -94,7 +100,8 @@ CREATE TABLE IF NOT EXISTS outbox (
   last_error TEXT,
   created_at TEXT NOT NULL,
   sent_at TEXT
-  ,platform_message_id TEXT
+  ,platform_message_id TEXT,
+  target_chat_id TEXT
 );
 CREATE TABLE IF NOT EXISTS media_usage (
   media_key TEXT PRIMARY KEY,
@@ -113,6 +120,25 @@ export function openDatabase(config) {
   mkdirSync(config.mediaDir, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(config.dbPath);
   db.exec(SCHEMA);
+  const approvalColumns = db.prepare('PRAGMA table_info(approvals)').all();
+  if (!approvalColumns.some((column) => column.name === 'approver_key')) {
+    db.exec('ALTER TABLE approvals ADD COLUMN approver_key TEXT');
+  }
+  const outboxColumns = db.prepare('PRAGMA table_info(outbox)').all();
+  if (!outboxColumns.some((column) => column.name === 'target_chat_id')) {
+    db.exec('ALTER TABLE outbox ADD COLUMN target_chat_id TEXT');
+  }
+  for (const person of config.approvers || []) {
+    const aliases = [person.name, ...(person.aliases || [])].filter(Boolean);
+    const historical = aliases.map((alias) => db.prepare(`SELECT sender_id,sender_name FROM inbound_messages
+      WHERE sender_name LIKE ? ORDER BY id DESC LIMIT 1`).get(`%${alias}%`)).find(Boolean);
+    const senderId = person.senderId || historical?.sender_id;
+    if (!senderId) continue;
+    db.prepare(`INSERT INTO approver_identities(approver_key,display_name,sender_id,updated_at)
+      VALUES(?,?,?,?) ON CONFLICT(approver_key) DO UPDATE SET
+      display_name=excluded.display_name,sender_id=excluded.sender_id,updated_at=excluded.updated_at`)
+      .run(person.key, person.name, senderId, nowIso());
+  }
   return db;
 }
 

@@ -6,6 +6,42 @@ import { isLatestDraftQuery, isRevisionText } from './intent.mjs';
 const DAY = 24 * 60 * 60 * 1000;
 const MORNING_RETRY_COOLDOWN = 15 * 60 * 1000;
 const STALE_JOB_TIMEOUT = 10 * 60 * 1000;
+const REMINDER_DELAY = 30 * 60 * 1000;
+
+function approvers(config) {
+  return config.approvers || [
+    { key: 'erez', name: 'ארז', aliases: ['ארז'] },
+    { key: 'shlomi', name: 'שלומי', aliases: ['שלומי'] },
+    { key: 'dori', name: 'דורי', aliases: ['דורי'] },
+    { key: 'shenhav', name: 'שנהב', aliases: ['שנהב'] },
+  ];
+}
+
+function resolveApprover(config, event) {
+  const senderName = normalize(event.senderName || '');
+  const senderId = String(event.senderId || '');
+  return approvers(config).find((person) => person.senderId === senderId
+    || [person.name, ...(person.aliases || [])].some((alias) => senderName.includes(normalize(alias))));
+}
+
+function learnApproverIdentity(db, person, event, now) {
+  if (!person) return;
+  db.prepare(`INSERT INTO approver_identities(approver_key,display_name,sender_id,updated_at)
+    VALUES(?,?,?,?) ON CONFLICT(approver_key) DO UPDATE SET
+    display_name=excluded.display_name,sender_id=excluded.sender_id,updated_at=excluded.updated_at`)
+    .run(person.key, person.name, event.senderId, nowIso(now));
+}
+
+function scheduleApprovalReminders(db, draftId, now) {
+  const groupAt = new Date(now.getTime() + REMINDER_DELAY);
+  const privateAt = new Date(now.getTime() + 2 * REMINDER_DELAY);
+  db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
+    VALUES(?,'approval_group_reminder',?,'pending',?,?,?)`)
+    .run(`approval-reminder:${draftId}:group`, JSON.stringify({ draftId }), nowIso(groupAt), nowIso(now), nowIso(now));
+  db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
+    VALUES(?,'approval_private_reminder',?,'pending',?,?,?)`)
+    .run(`approval-reminder:${draftId}:private:1`, JSON.stringify({ draftId, round: 1 }), nowIso(privateAt), nowIso(now), nowIso(now));
+}
 
 function enqueue(db, { dedupeKey, body, mediaPath = null, replyToId = null, entityType = null, entityId = null }, now) {
   db.prepare(`INSERT OR IGNORE INTO outbox
@@ -88,7 +124,7 @@ function chooseAlternativeMedia(db, currentMedia = []) {
 
 function draftBody(post, version, copy, media) {
   const mediaLine = media.length ? `\n\nמדיה: ${media.length} קבצים מצורפים` : '\n\nמדיה: טרם צורפה';
-  return `סקיצה ${post.public_id} · גרסה ${version}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}${mediaLine}\n\nלאישור השיבו ישירות: מאשר / מאשר לפייסבוק / מאשר לאינסטגרם`;
+  return `סקיצה ${post.public_id} · גרסה ${version}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}${mediaLine}\n\nנדרשים ארבעה אישורים על הגרסה הזו: ארז, שלומי, דורי ושנהב. כל אחד משיב ישירות לסקיצה: מאשר`;
 }
 
 function createDraftVersion(db, post, copy, brief, media, now, type = 'draft_created') {
@@ -111,6 +147,7 @@ function createDraftVersion(db, post, copy, brief, media, now, type = 'draft_cre
   }, now);
   db.prepare("UPDATE posts SET status='awaiting_approval', brief=?, media_json=?, updated_at=?, expires_at=? WHERE id=?")
     .run(brief, JSON.stringify(media), nowIso(now), new Date(now.getTime() + 72 * 60 * 60 * 1000).toISOString(), post.id);
+  scheduleApprovalReminders(db, draftId, now);
   return { type, post: post.public_id, draftId, version };
 }
 
@@ -168,7 +205,7 @@ function createPost(db, event, now) {
   return { id: Number(result.lastInsertRowid), public_id: publicId };
 }
 
-function handleApproval(db, event, command, draft, now) {
+function handleApproval(db, config, event, command, draft, now) {
   if (!draft) {
     enqueue(db, { dedupeKey: `clarify:${event.id}`, body: 'לא מצאתי את הסקיצה שאליה התכוונת. נא להשיב ישירות להודעת הסקיצה.' }, now);
     return { type: 'clarification_required' };
@@ -182,10 +219,27 @@ function handleApproval(db, event, command, draft, now) {
     enqueue(db, { dedupeKey: `expired:${event.id}`, body: 'תוקף הסקיצה פג לאחר 72 שעות. אכין גרסה עדכנית לאישור חדש.' }, now);
     return { type: 'approval_expired' };
   }
+  const person = resolveApprover(config, event);
+  if (!person) {
+    enqueue(db, { dedupeKey: `unauthorized-approval:${event.id}`, body: 'האישור לא נספר. המאשרים לגרסה הם ארז, שלומי, דורי ושנהב בלבד.' }, now);
+    return { type: 'approval_not_counted', draftId: draft.id };
+  }
+  learnApproverIdentity(db, person, event, now);
+  const duplicate = db.prepare('SELECT 1 FROM approvals WHERE draft_id=? AND approver_key=?').get(draft.id, person.key);
+  if (duplicate) {
+    enqueue(db, { dedupeKey: `duplicate-approval:${event.id}`, body: `האישור של ${person.name} כבר נספר לגרסה ${draft.version}.` }, now);
+    return { type: 'approval_already_counted', draftId: draft.id, approver: person.key };
+  }
   db.prepare(`INSERT OR IGNORE INTO approvals
-    (draft_id,source_message_id,approver_id,channels,approved_at) VALUES(?,?,?,?,?)`)
-    .run(draft.id, event.id, event.senderId, JSON.stringify(command.channels), nowIso(now));
-  for (const channel of command.channels) {
+    (draft_id,source_message_id,approver_id,channels,approved_at,approver_key) VALUES(?,?,?,?,?,?)`)
+    .run(draft.id, event.id, event.senderId, JSON.stringify(['facebook', 'instagram']), nowIso(now), person.key);
+  const approvedKeys = new Set(db.prepare('SELECT approver_key FROM approvals WHERE draft_id=? AND approver_key IS NOT NULL').all(draft.id).map((row) => row.approver_key));
+  const missing = approvers(config).filter((candidate) => !approvedKeys.has(candidate.key));
+  if (missing.length) {
+    enqueue(db, { dedupeKey: `approval-progress:${event.id}`, body: `האישור של ${person.name} נקלט לגרסה ${draft.version}. ממתינים ל: ${missing.map((candidate) => candidate.name).join(', ')}.` }, now);
+    return { type: 'approval_recorded', draftId: draft.id, approver: person.key, missing: missing.map((candidate) => candidate.key) };
+  }
+  for (const channel of ['facebook', 'instagram']) {
     db.prepare(`INSERT INTO publications(draft_id,channel,status,attempts,updated_at)
       VALUES(?,?,'queued',0,?) ON CONFLICT(draft_id,channel) DO NOTHING`)
       .run(draft.id, channel, nowIso(now));
@@ -194,8 +248,8 @@ function handleApproval(db, event, command, draft, now) {
       .run(`publish:${draft.id}:${channel}`, JSON.stringify({ draftId: draft.id, channel }), nowIso(now), nowIso(now), nowIso(now));
   }
   db.prepare("UPDATE posts SET status='approved', updated_at=? WHERE id=?").run(nowIso(now), draft.post_id);
-  enqueue(db, { dedupeKey: `approved:${event.id}`, body: `האישור נקלט לגרסה ${draft.version}. הפרסום הוכנס לתור המאובטח.` }, now);
-  return { type: 'approved', draftId: draft.id, channels: command.channels };
+  enqueue(db, { dedupeKey: `approved:${event.id}`, body: `כל ארבעת האישורים נקלטו לגרסה ${draft.version}. הפוסט הוכנס לפרסום מיידי בפייסבוק ובאינסטגרם.` }, now);
+  return { type: 'approved', draftId: draft.id, channels: ['facebook', 'instagram'] };
 }
 
 function handleLatestDraftQuery(db, event, now) {
@@ -225,6 +279,7 @@ export function ingestEvent(db, config, event, now = new Date()) {
     .run(event.id, event.chatId, event.senderId, event.senderName || null, event.text || '', event.replyToId || null,
       JSON.stringify(event.media || []), event.receivedAt || nowIso(now));
   if (!inserted.changes) return { type: 'duplicate' };
+  learnApproverIdentity(db, resolveApprover(config, event), event, now);
 
   const command = extractCommand(event.text);
   const semanticIntent = event.semantic?.intent || null;
@@ -269,7 +324,7 @@ export function ingestEvent(db, config, event, now = new Date()) {
   } else if (latestQuery) {
     result = handleLatestDraftQuery(db, event, now);
   } else if (effectiveCommand.type === 'approve') {
-    result = handleApproval(db, event, effectiveCommand, draft, now);
+    result = handleApproval(db, config, event, effectiveCommand, draft, now);
   } else if (effectiveCommand.type === 'cancel') {
     if (!draft) {
       result = { type: 'clarification_required' };
@@ -324,14 +379,16 @@ export function scheduleDueWork(db, now = new Date()) {
   const weekday = parts.weekday;
   const minutes = Number(parts.hour) * 60 + Number(parts.minute);
   const workday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'].includes(weekday);
-  const pendingMorning = db.prepare(`SELECT 1 FROM posts p JOIN drafts d ON d.post_id=p.id
-    WHERE p.source_kind='morning' AND p.status='awaiting_approval' AND d.status='pending' LIMIT 1`).get();
+  for (const row of db.prepare(`SELECT d.id FROM drafts d JOIN posts p ON p.id=d.post_id
+    WHERE d.status='pending' AND p.status='awaiting_approval'`).all()) {
+    scheduleApprovalReminders(db, row.id, now);
+  }
   if (workday && minutes >= 490) {
     const syncKey = `media-sync:${date}`;
     db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
       VALUES(?,'media_sync','{}','pending',?,?,?)`).run(syncKey, nowIso(now), nowIso(now), nowIso(now));
   }
-  if (workday && minutes >= 510 && !pendingMorning) {
+  if (workday && minutes >= 510) {
     const key = `morning:${date}`;
     db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
       VALUES(?,'morning_proposal','{}','pending',?,?,?)`).run(key, nowIso(now), nowIso(now), nowIso(now));

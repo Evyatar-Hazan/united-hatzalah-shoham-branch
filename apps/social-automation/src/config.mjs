@@ -3,6 +3,23 @@ import { join, resolve } from 'node:path';
 
 const expandHome = (value) => value?.replace(/^~(?=$|\/)/, homedir());
 
+const DEFAULT_APPROVERS = [
+  { key: 'erez', name: 'ארז', aliases: ['ארז'] },
+  { key: 'shlomi', name: 'שלומי', aliases: ['שלומי'] },
+  { key: 'dori', name: 'דורי', aliases: ['דורי'] },
+  { key: 'shenhav', name: 'שנהב', aliases: ['שנהב'] },
+];
+
+function approvalRoster(env) {
+  if (!env.SOCIAL_APPROVERS_JSON) return DEFAULT_APPROVERS;
+  try {
+    const parsed = JSON.parse(env.SOCIAL_APPROVERS_JSON);
+    return Array.isArray(parsed) && parsed.length === 4 ? parsed : DEFAULT_APPROVERS;
+  } catch {
+    return DEFAULT_APPROVERS;
+  }
+}
+
 export function loadConfig(env = process.env) {
   const dataDir = resolve(expandHome(env.SOCIAL_DATA_DIR || join(homedir(), 'Library/Application Support/ShohamSocial')));
   return {
@@ -18,6 +35,7 @@ export function loadConfig(env = process.env) {
     metaPageId: env.SOCIAL_META_PAGE_ID || '',
     groupId: env.SOCIAL_GROUP_ID || '',
     ownerId: env.SOCIAL_OWNER_ID || '',
+    approvers: approvalRoster(env),
     hermesDb: resolve(expandHome(env.SOCIAL_HERMES_DB || join(homedir(), '.hermes/state.db'))),
     hermesCommand: resolve(expandHome(env.SOCIAL_HERMES_COMMAND || join(homedir(), '.local/bin/hermes'))),
     codexCommand: resolve(expandHome(env.SOCIAL_CODEX_COMMAND || '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex')),

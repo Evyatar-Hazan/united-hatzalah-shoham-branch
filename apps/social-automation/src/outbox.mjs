@@ -25,9 +25,10 @@ export async function flushOutbox(db, config, now = new Date(), limit = 20) {
     }
     try {
       const body = formatOutboxBody(config, row.body);
+      const chatId = row.target_chat_id || config.groupId;
       const payload = row.media_path
-        ? { chatId: config.groupId, filePath: row.media_path, caption: body }
-        : { chatId: config.groupId, message: body, replyTo: row.reply_to_id || undefined };
+        ? { chatId, filePath: row.media_path, caption: body }
+        : { chatId, message: body, replyTo: row.reply_to_id || undefined };
       const data = await bridgePost(config, row.media_path ? '/send-media' : '/send', payload);
       db.prepare("UPDATE outbox SET status='sent', attempts=attempts+1, sent_at=?, platform_message_id=? WHERE id=?")
         .run(nowIso(now), data.messageId || null, row.id);
