@@ -1,6 +1,8 @@
 import { mkdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
+const isWhatsAppJid = (value) => /^\d{5,}@(lid|s\.whatsapp\.net)$/.test(String(value || ''));
+
 const SCHEMA = `
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -132,7 +134,7 @@ export function openDatabase(config) {
     const aliases = [person.name, ...(person.aliases || [])].filter(Boolean);
     const historical = aliases.map((alias) => db.prepare(`SELECT sender_id,sender_name FROM inbound_messages
       WHERE sender_name LIKE ? ORDER BY id DESC LIMIT 1`).get(`%${alias}%`)).find(Boolean);
-    const senderId = person.senderId || historical?.sender_id;
+    const senderId = [person.senderId, historical?.sender_id].find(isWhatsAppJid);
     if (!senderId) continue;
     db.prepare(`INSERT INTO approver_identities(approver_key,display_name,sender_id,updated_at)
       VALUES(?,?,?,?) ON CONFLICT(approver_key) DO UPDATE SET

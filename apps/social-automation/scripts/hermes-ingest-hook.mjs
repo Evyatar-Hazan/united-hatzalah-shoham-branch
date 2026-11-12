@@ -68,6 +68,7 @@ try {
     id: String(extra.turn_id || `${payload.session_id}:${Date.now()}`),
     chatId: config.groupId,
     senderId: String(extra.sender_id || 'unknown'),
+    senderName: String(extra.sender_name || ''),
     text,
     replyToId: String(extra.reply_to_id || '') || null,
     replyToText: String(extra.reply_to_text || reply?.[1] || approvalClarification?.replyToText || '') || null,

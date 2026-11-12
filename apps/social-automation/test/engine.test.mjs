@@ -9,10 +9,10 @@ import { processJobs } from '../src/jobs.mjs';
 import { flushOutbox } from '../src/outbox.mjs';
 
 const APPROVERS = [
-  { key: 'erez', name: 'ארז', senderId: 'erez-id' },
-  { key: 'shlomi', name: 'שלומי', senderId: 'shlomi-id' },
-  { key: 'dori', name: 'דורי', senderId: 'dori-id' },
-  { key: 'shenhav', name: 'שנהב', senderId: 'shenhav-id' },
+  { key: 'erez', name: 'ארז', senderId: '10001@lid' },
+  { key: 'shlomi', name: 'שלומי', senderId: '10002@lid' },
+  { key: 'dori', name: 'דורי', senderId: '10003@lid' },
+  { key: 'shenhav', name: 'שנהב', senderId: '10004@lid' },
 ];
 
 function fixture() {
@@ -218,7 +218,7 @@ test('a revised version resets every approval and requires a fresh four-person v
   } finally { f.close(); }
 });
 
-test('pending approvers get one group reminder and then targeted Hermes reminders every thirty minutes', async () => {
+test('pending approvers get group and targeted Hermes reminders after thirty minutes', async () => {
   const f = fixture();
   try {
     const now = new Date('2026-11-08T06:30:00.000Z');
@@ -240,11 +240,36 @@ test('pending approvers get one group reminder and then targeted Hermes reminder
     const groupReminder = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:group:message'").get();
     assert.match(groupReminder.body, /שלומי, דורי, שנהב/);
     assert.equal(groupReminder.target_chat_id, null);
-    await processJobs(f.db, f.config, new Date(now.getTime() + 61 * 60_000));
     const privateRows = f.db.prepare("SELECT target_chat_id FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' ORDER BY target_chat_id").all();
-    assert.deepEqual(privateRows.map((row) => row.target_chat_id), ['dori-id', 'shenhav-id', 'shlomi-id']);
+    assert.deepEqual(privateRows.map((row) => row.target_chat_id), ['10002@lid', '10003@lid', '10004@lid']);
     const next = f.db.prepare("SELECT * FROM jobs WHERE job_key LIKE 'approval-reminder:%:private:2'").get();
     assert.ok(next);
+  } finally { f.close(); }
+});
+
+test('private reminders never send to placeholder identities', async () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-08T06:30:00.000Z');
+    ingestEvent(f.db, f.config, { id: 'draft', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [] }, now);
+    f.db.prepare(`INSERT INTO approver_identities(approver_key,display_name,sender_id,updated_at)
+      VALUES('shenhav','שנהב','recovered-group-member-shanhav',?)
+      ON CONFLICT(approver_key) DO UPDATE SET sender_id=excluded.sender_id`).run(now.toISOString());
+    await processJobs(f.db, f.config, new Date(now.getTime() + 31 * 60_000));
+    const unsafe = f.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE target_chat_id='recovered-group-member-shanhav'").get();
+    assert.equal(unsafe.count, 0);
+  } finally { f.close(); }
+});
+
+test('approver identity learning rejects non-WhatsApp placeholders', () => {
+  const f = fixture();
+  try {
+    f.db.prepare("DELETE FROM approver_identities WHERE approver_key='shenhav'").run();
+    ingestEvent(f.db, f.config, {
+      id: 'placeholder', chatId: 'group@g.us', senderId: 'recovered-group-member-shanhav', senderName: 'שנהב',
+      text: 'הודעת קבוצה', semantic: { intent: 'group_conversation', confidence: 1 },
+    });
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM approver_identities WHERE approver_key='shenhav'").get().count, 0);
   } finally { f.close(); }
 });
 

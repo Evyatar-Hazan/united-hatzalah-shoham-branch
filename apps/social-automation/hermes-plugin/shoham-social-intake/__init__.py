@@ -38,6 +38,7 @@ def _persist(event: Any) -> bool:
             "user_message": _message(event),
             "turn_id": str(getattr(event, "message_id", "") or "event"),
             "sender_id": str(getattr(event, "user_id", "") or "unknown"),
+            "sender_name": str(getattr(event, "user_name", "") or ""),
             "reply_to_is_own": bool(getattr(event, "reply_to_is_own_message", False)),
             "reply_to_id": str(getattr(event, "reply_to_message_id", "") or ""),
             "reply_to_text": str(getattr(event, "reply_to_text", "") or ""),

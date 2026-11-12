@@ -18,6 +18,7 @@ def _event(chat_id="120363432982998492@g.us"):
         source=SimpleNamespace(platform=SimpleNamespace(value="whatsapp"), chat_id=chat_id),
         message_id="m1",
         user_id="u1",
+        user_name="ארז",
         reply_to_text=None,
         reply_to_message_id=None,
         reply_to_is_own_message=False,
@@ -36,6 +37,7 @@ def test_only_target_group_is_intercepted(monkeypatch, tmp_path):
     assert len(files) == 1
     payload = json.loads(files[0].read_text())
     assert payload["extra"]["user_message"] == "שיחה רגילה"
+    assert payload["extra"]["sender_name"] == "ארז"
 
     assert module._on_pre_gateway_dispatch(event=_event()) == result
     assert len(list(tmp_path.glob("*.json"))) == 1

@@ -25,7 +25,7 @@ function resolveApprover(config, event) {
 }
 
 function learnApproverIdentity(db, person, event, now) {
-  if (!person) return;
+  if (!person || !/^\d{5,}@(lid|s\.whatsapp\.net)$/.test(String(event.senderId || ''))) return;
   db.prepare(`INSERT INTO approver_identities(approver_key,display_name,sender_id,updated_at)
     VALUES(?,?,?,?) ON CONFLICT(approver_key) DO UPDATE SET
     display_name=excluded.display_name,sender_id=excluded.sender_id,updated_at=excluded.updated_at`)
@@ -34,7 +34,7 @@ function learnApproverIdentity(db, person, event, now) {
 
 function scheduleApprovalReminders(db, draftId, now) {
   const groupAt = new Date(now.getTime() + REMINDER_DELAY);
-  const privateAt = new Date(now.getTime() + 2 * REMINDER_DELAY);
+  const privateAt = groupAt;
   db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
     VALUES(?,'approval_group_reminder',?,'pending',?,?,?)`)
     .run(`approval-reminder:${draftId}:group`, JSON.stringify({ draftId }), nowIso(groupAt), nowIso(now), nowIso(now));

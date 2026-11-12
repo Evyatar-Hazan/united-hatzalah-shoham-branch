@@ -52,7 +52,7 @@ function chooseMedia(db, now) {
 
 function scheduleApprovalReminders(db, draftId, now) {
   const groupAt = new Date(now.getTime() + REMINDER_DELAY);
-  const privateAt = new Date(now.getTime() + 2 * REMINDER_DELAY);
+  const privateAt = groupAt;
   db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
     VALUES(?,'approval_group_reminder',?,'pending',?,?,?)`)
     .run(`approval-reminder:${draftId}:group`, JSON.stringify({ draftId }), nowIso(groupAt), nowIso(now), nowIso(now));
@@ -81,7 +81,7 @@ function runPrivateApprovalReminder(db, config, payload, job, now) {
   if (!state.active || !state.missing.length) return { status: 'done' };
   for (const person of state.missing) {
     const identity = db.prepare('SELECT sender_id FROM approver_identities WHERE approver_key=?').get(person.key);
-    if (!identity?.sender_id) continue;
+    if (!/^\d{5,}@(lid|s\.whatsapp\.net)$/.test(String(identity?.sender_id || ''))) continue;
     queueOutbox(db, `${job.job_key}:${person.key}`, `היי ${person.name}, סקיצה ${state.draft.public_id}, גרסה ${state.draft.version}, עדיין ממתינה לאישור שלך. אפשר לחזור לקבוצה ולהשיב ישירות לסקיצה: מאשר`, now, null, null, null, identity.sender_id);
   }
   const nextRound = Number(payload.round || 1) + 1;
