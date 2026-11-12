@@ -138,7 +138,7 @@ function chooseAlternativeMedia(db, currentMedia = []) {
 
 function draftBody(post, version, copy, media) {
   const mediaLine = media.length ? `\n\nמדיה: ${media.length} קבצים מצורפים` : '\n\nמדיה: טרם צורפה';
-  return `סקיצה ${post.public_id} · גרסה ${version}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}${mediaLine}\n\nנדרשים ארבעה אישורים על הגרסה הזו: ארז, שלומי, דורי ושנהב. כל אחד משיב ישירות לסקיצה: מאשר`;
+  return `סקיצה ${post.public_id} · גרסה ${version}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}${mediaLine}\n\nנדרש אישור אחד על הגרסה הזו מאחד המאשרים: ארז, שלומי, דורי או שנהב. יש להשיב ישירות לסקיצה: מאשר`;
 }
 
 export function retireSupersededDraftWork(db, draftIds = null) {
@@ -284,13 +284,6 @@ function handleApproval(db, config, event, command, draft, now) {
   db.prepare(`INSERT OR IGNORE INTO approvals
     (draft_id,source_message_id,approver_id,channels,approved_at,approver_key) VALUES(?,?,?,?,?,?)`)
     .run(draft.id, event.id, event.senderId, JSON.stringify(['facebook', 'instagram']), nowIso(now), person.key);
-  const approvedKeys = new Set(db.prepare('SELECT approver_key FROM approvals WHERE draft_id=? AND approver_key IS NOT NULL').all(draft.id).map((row) => row.approver_key));
-  const missing = approvers(config).filter((candidate) => !approvedKeys.has(candidate.key));
-  if (missing.length) {
-    if (privateTarget) enqueue(db, { dedupeKey: `approval-private-ack:${event.id}`, body: `האישור שלך נקלט לגרסה ${draft.version}. תודה.`, targetChatId: privateTarget }, now);
-    enqueue(db, { dedupeKey: `approval-progress:${event.id}`, body: `האישור של ${person.name} נקלט לגרסה ${draft.version}. ממתינים ל: ${missing.map((candidate) => candidate.name).join(', ')}.` }, now);
-    return { type: 'approval_recorded', draftId: draft.id, approver: person.key, missing: missing.map((candidate) => candidate.key) };
-  }
   for (const channel of ['facebook', 'instagram']) {
     db.prepare(`INSERT INTO publications(draft_id,channel,status,attempts,updated_at)
       VALUES(?,?,'queued',0,?) ON CONFLICT(draft_id,channel) DO NOTHING`)
@@ -301,8 +294,8 @@ function handleApproval(db, config, event, command, draft, now) {
   }
   db.prepare("UPDATE posts SET status='approved', updated_at=? WHERE id=?").run(nowIso(now), draft.post_id);
   if (privateTarget) enqueue(db, { dedupeKey: `approval-private-ack:${event.id}`, body: `האישור שלך נקלט לגרסה ${draft.version}. תודה.`, targetChatId: privateTarget }, now);
-  enqueue(db, { dedupeKey: `approved:${event.id}`, body: `כל ארבעת האישורים נקלטו לגרסה ${draft.version}. הפוסט הוכנס לפרסום מיידי בפייסבוק ובאינסטגרם.` }, now);
-  return { type: 'approved', draftId: draft.id, channels: ['facebook', 'instagram'] };
+  enqueue(db, { dedupeKey: `approved:${event.id}`, body: `האישור של ${person.name} נקלט לגרסה ${draft.version}. הפוסט הוכנס לפרסום מיידי בפייסבוק ובאינסטגרם.` }, now);
+  return { type: 'approved', draftId: draft.id, approver: person.key, channels: ['facebook', 'instagram'] };
 }
 
 function handleLatestDraftQuery(db, event, now) {

@@ -93,11 +93,11 @@ test('Hermes ingest hook accepts a private approval only from a verified approve
   });
   try {
     assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /approval_recorded/);
+    assert.match(result.stdout, /approved/);
     const check = openDatabase(config);
     assert.equal(check.prepare('SELECT approver_key FROM approvals WHERE draft_id=?').get(draft.id).approver_key, 'erez');
     assert.equal(check.prepare("SELECT target_chat_id FROM outbox WHERE dedupe_key='approval-private-ack:private-turn'").get().target_chat_id, senderId);
-    assert.equal(check.prepare("SELECT target_chat_id FROM outbox WHERE dedupe_key='approval-progress:private-turn'").get().target_chat_id, null);
+    assert.equal(check.prepare("SELECT target_chat_id FROM outbox WHERE dedupe_key='approved:private-turn'").get().target_chat_id, null);
     check.close();
   } finally {
     rmSync(dataDir, { recursive: true, force: true });

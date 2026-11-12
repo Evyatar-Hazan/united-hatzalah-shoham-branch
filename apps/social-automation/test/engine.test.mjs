@@ -23,7 +23,7 @@ function fixture() {
 }
 
 function approve(f, replyToId, prefix = 'approval', now = new Date()) {
-  return APPROVERS.map((person, index) => ingestEvent(f.db, f.config, {
+  return APPROVERS.slice(0, 1).map((person, index) => ingestEvent(f.db, f.config, {
     id: `${prefix}-${person.key}`,
     chatId: 'group@g.us',
     senderId: person.senderId,
@@ -43,19 +43,13 @@ test('duplicate inbound messages are idempotent', () => {
   } finally { f.close(); }
 });
 
-test('all four named approvers must approve the same draft before both channels are queued', () => {
+test('one approval from the approved roster queues both channels', () => {
   const f = fixture();
   try {
     ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'תרגול מתנדבים', media: [] });
     const outbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
     f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-message', outbox.id);
-    const results = APPROVERS.slice(0, 3).map((person) => ingestEvent(f.db, f.config, {
-      id: `approval-${person.key}`, chatId: 'group@g.us', senderId: person.senderId,
-      senderName: person.name, text: 'מאשר', replyToId: 'draft-message',
-    }));
-    assert.ok(results.every((result) => result.type === 'approval_recorded'));
-    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE kind='publish'").get().count, 0);
-    const last = APPROVERS[3];
+    const last = APPROVERS[2];
     const result = ingestEvent(f.db, f.config, {
       id: `approval-${last.key}`, chatId: 'group@g.us', senderId: last.senderId,
       senderName: last.name, text: 'מאשר', replyToId: 'draft-message',
@@ -66,7 +60,7 @@ test('all four named approvers must approve the same draft before both channels 
   } finally { f.close(); }
 });
 
-test('the owner is not an approver and cannot advance the four-person gate', () => {
+test('the owner is not an approver and cannot advance the approval gate', () => {
   const f = fixture();
   try {
     ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'תרגול מתנדבים', media: [] });
@@ -102,10 +96,10 @@ test('verified private approval stays private and updates group approval status'
       senderId: APPROVERS[0].senderId, senderName: APPROVERS[0].name, text: 'מאשר',
       semantic: { intent: 'approve_draft', channels: ['facebook', 'instagram'] },
     }, new Date(now.getTime() + 1000));
-    assert.equal(result.type, 'approval_recorded');
+    assert.equal(result.type, 'approved');
     assert.equal(f.db.prepare('SELECT approver_key FROM approvals WHERE draft_id=?').get(draft.id).approver_key, 'erez');
     const privateAck = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key='approval-private-ack:private-approval'").get();
-    const groupStatus = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key='approval-progress:private-approval'").get();
+    const groupStatus = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key='approved:private-approval'").get();
     assert.equal(privateAck.target_chat_id, APPROVERS[0].senderId);
     assert.equal(groupStatus.target_chat_id, null);
     assert.doesNotMatch(groupStatus.body, /תזכורת פרטית/);
@@ -159,7 +153,7 @@ test('a short yes confirms the exact draft named in the latest bot clarification
       replyToText: resolved.replyToText,
       semantic: { intent: 'approve_draft', confidence: 1, channels: resolved.channels },
     }, new Date(now.getTime() + 30_000));
-    assert.equal(result.type, 'approval_recorded');
+    assert.equal(result.type, 'approved');
   } finally { f.close(); }
 });
 
@@ -239,18 +233,16 @@ test('a targeted revision applies to the only active draft without a direct repl
   } finally { f.close(); }
 });
 
-test('a revised version resets every approval and requires a fresh four-person vote', () => {
+test('a revised version retires the prior approval and requires a fresh approval', () => {
   const f = fixture();
   try {
     ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [] });
     const firstOutbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
     f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-v1', firstOutbox.id);
-    const first = APPROVERS[0];
-    assert.equal(ingestEvent(f.db, f.config, {
-      id: 'approve-v1', chatId: 'group@g.us', senderId: first.senderId, senderName: first.name,
-      text: 'מאשר', replyToId: 'draft-v1',
-    }).type, 'approval_recorded');
     const firstDraft = f.db.prepare("SELECT id FROM drafts WHERE status='pending'").get();
+    f.db.prepare(`INSERT INTO approvals
+      (draft_id,source_message_id,approver_id,channels,approved_at,approver_key)
+      VALUES(?,?,?,?,?,?)`).run(firstDraft.id, 'old-approval', APPROVERS[0].senderId, '["facebook","instagram"]', new Date().toISOString(), APPROVERS[0].key);
     assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE job_key LIKE ? AND kind LIKE 'approval_%'")
       .get(`approval-reminder:${firstDraft.id}:%`).count, 2);
     f.db.prepare(`INSERT INTO outbox(dedupe_key,kind,body,status,created_at)
@@ -270,7 +262,7 @@ test('a revised version resets every approval and requires a fresh four-person v
   } finally { f.close(); }
 });
 
-test('pending approvers get group and targeted Hermes reminders after thirty minutes', async () => {
+test('an unapproved draft gets group and targeted Hermes reminders after thirty minutes', async () => {
   const f = fixture();
   try {
     const now = new Date('2026-11-08T06:30:00.000Z');
@@ -283,18 +275,13 @@ test('pending approvers get group and targeted Hermes reminders after thirty min
     ingestEvent(f.db, f.config, { id: 'draft', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [] }, now);
     const draftOutbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
     f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-message', draftOutbox.id);
-    const first = APPROVERS[0];
-    ingestEvent(f.db, f.config, {
-      id: 'approve-one', chatId: 'group@g.us', senderId: first.senderId, senderName: first.name,
-      text: 'מאשר', replyToId: 'draft-message',
-    }, new Date(now.getTime() + 1000));
     await processJobs(f.db, f.config, new Date(now.getTime() + 31 * 60_000));
     const groupReminder = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:group:message'").get();
-    assert.match(groupReminder.body, /שלומי, דורי, שנהב/);
+    assert.match(groupReminder.body, /ארז, שלומי, דורי, שנהב/);
     assert.equal(groupReminder.target_chat_id, null);
     const privateRows = f.db.prepare("SELECT target_chat_id FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' ORDER BY target_chat_id").all();
-    assert.deepEqual(privateRows.map((row) => row.target_chat_id), ['10002@lid', '10003@lid', '10004@lid']);
-    assert.ok(f.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' AND entity_type='draft' AND entity_id IS NOT NULL").get().count === 3);
+    assert.deepEqual(privateRows.map((row) => row.target_chat_id), ['10001@lid', '10002@lid', '10003@lid', '10004@lid']);
+    assert.ok(f.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' AND entity_type='draft' AND entity_id IS NOT NULL").get().count === 4);
     const next = f.db.prepare("SELECT * FROM jobs WHERE job_key LIKE 'approval-reminder:%:private:2'").get();
     assert.ok(next);
   } finally { f.close(); }
@@ -480,7 +467,7 @@ test('daily proposal is idempotent, includes media, and completes both publicati
 
     f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('morning-draft-message', proposal.id);
     const approvals = approve(f, 'morning-draft-message', 'morning-approval', new Date(now.getTime() + 60_000));
-    assert.equal(approvals[3].type, 'approved');
+    assert.equal(approvals[0].type, 'approved');
     f.config.metaDryRun = false;
     const calls = [];
     const browserBridge = {
