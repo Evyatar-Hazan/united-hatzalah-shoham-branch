@@ -24,6 +24,11 @@ function resolveApprover(config, event) {
     || [person.name, ...(person.aliases || [])].some((alias) => senderName.includes(normalize(alias))));
 }
 
+function resolvePrivateApprover(db, config, event) {
+  const identity = db.prepare('SELECT approver_key FROM approver_identities WHERE sender_id=?').get(String(event.senderId || ''));
+  return identity ? approvers(config).find((person) => person.key === identity.approver_key) : null;
+}
+
 function learnApproverIdentity(db, person, event, now) {
   if (!person || !/^\d{5,}@(lid|s\.whatsapp\.net)$/.test(String(event.senderId || ''))) return;
   db.prepare(`INSERT INTO approver_identities(approver_key,display_name,sender_id,updated_at)
@@ -43,11 +48,11 @@ function scheduleApprovalReminders(db, draftId, now) {
     .run(`approval-reminder:${draftId}:private:1`, JSON.stringify({ draftId, round: 1 }), nowIso(privateAt), nowIso(now), nowIso(now));
 }
 
-function enqueue(db, { dedupeKey, body, mediaPath = null, replyToId = null, entityType = null, entityId = null }, now) {
+function enqueue(db, { dedupeKey, body, mediaPath = null, replyToId = null, entityType = null, entityId = null, targetChatId = null }, now) {
   db.prepare(`INSERT OR IGNORE INTO outbox
-    (dedupe_key,kind,body,media_path,reply_to_id,entity_type,entity_id,status,created_at)
-    VALUES(?,?,?,?,?,?,?,'pending',?)`)
-    .run(dedupeKey, mediaPath ? 'media' : 'text', body, mediaPath, replyToId, entityType, entityId, nowIso(now));
+    (dedupe_key,kind,body,media_path,reply_to_id,entity_type,entity_id,target_chat_id,status,created_at)
+    VALUES(?,?,?,?,?,?,?,?,'pending',?)`)
+    .run(dedupeKey, mediaPath ? 'media' : 'text', body, mediaPath, replyToId, entityType, entityId, targetChatId, nowIso(now));
 }
 
 function findDraftByReply(db, replyToId, replyToText = '') {
@@ -60,6 +65,15 @@ function findDraftByReply(db, replyToId, replyToText = '') {
   if (!match) return null;
   return db.prepare(`SELECT d.*, p.public_id, p.status AS post_status FROM drafts d
     JOIN posts p ON p.id=d.post_id WHERE p.public_id=? AND d.version=?`).get(match[1].toUpperCase(), Number(match[2]));
+}
+
+function findPrivateReminderDraft(db, senderId) {
+  return db.prepare(`SELECT d.*,p.public_id,p.status AS post_status
+    FROM outbox o JOIN drafts d ON o.entity_type='draft' AND o.entity_id=d.id
+    JOIN posts p ON p.id=d.post_id
+    WHERE o.target_chat_id=? AND o.status='sent'
+      AND d.status='pending' AND p.status='awaiting_approval'
+    ORDER BY o.sent_at DESC,o.id DESC LIMIT 1`).get(senderId);
 }
 
 export function resolveApprovalClarification(db, text, now = new Date()) {
@@ -241,28 +255,30 @@ function createPost(db, event, now) {
 }
 
 function handleApproval(db, config, event, command, draft, now) {
+  const privateTarget = event.isPrivate ? event.chatId : null;
+  const privatePerson = event.isPrivate ? resolvePrivateApprover(db, config, event) : null;
   if (!draft) {
-    enqueue(db, { dedupeKey: `clarify:${event.id}`, body: 'לא מצאתי את הסקיצה שאליה התכוונת. נא להשיב ישירות להודעת הסקיצה.' }, now);
+    enqueue(db, { dedupeKey: `clarify:${event.id}`, body: 'לא מצאתי בוודאות איזו סקיצה לאשר. נא להשיב ישירות לתזכורת הפרטית של הסקיצה.', targetChatId: privateTarget }, now);
     return { type: 'clarification_required' };
   }
   if (draft.status !== 'pending' || draft.post_status !== 'awaiting_approval') {
-    enqueue(db, { dedupeKey: `stale:${event.id}`, body: 'הסקיצה הזו אינה הגרסה הפעילה. נא לאשר את הגרסה האחרונה בלבד.' }, now);
+    enqueue(db, { dedupeKey: `stale:${event.id}`, body: 'הסקיצה הזו אינה הגרסה הפעילה. נא לאשר את הגרסה האחרונה בלבד.', targetChatId: privateTarget }, now);
     return { type: 'stale_approval' };
   }
   const post = db.prepare('SELECT expires_at FROM posts WHERE id=?').get(draft.post_id);
   if (post?.expires_at && new Date(post.expires_at) < now) {
-    enqueue(db, { dedupeKey: `expired:${event.id}`, body: 'תוקף הסקיצה פג לאחר 72 שעות. אכין גרסה עדכנית לאישור חדש.' }, now);
+    enqueue(db, { dedupeKey: `expired:${event.id}`, body: 'תוקף הסקיצה פג לאחר 72 שעות. אכין גרסה עדכנית לאישור חדש.', targetChatId: privateTarget }, now);
     return { type: 'approval_expired' };
   }
-  const person = resolveApprover(config, event);
+  const person = event.isPrivate ? privatePerson : resolveApprover(config, event);
   if (!person) {
-    enqueue(db, { dedupeKey: `unauthorized-approval:${event.id}`, body: 'האישור לא נספר. המאשרים לגרסה הם ארז, שלומי, דורי ושנהב בלבד.' }, now);
+    enqueue(db, { dedupeKey: `unauthorized-approval:${event.id}`, body: 'האישור לא נספר. המאשרים לגרסה הם ארז, שלומי, דורי ושנהב בלבד.', targetChatId: privateTarget }, now);
     return { type: 'approval_not_counted', draftId: draft.id };
   }
   learnApproverIdentity(db, person, event, now);
   const duplicate = db.prepare('SELECT 1 FROM approvals WHERE draft_id=? AND approver_key=?').get(draft.id, person.key);
   if (duplicate) {
-    enqueue(db, { dedupeKey: `duplicate-approval:${event.id}`, body: `האישור של ${person.name} כבר נספר לגרסה ${draft.version}.` }, now);
+    enqueue(db, { dedupeKey: `duplicate-approval:${event.id}`, body: `האישור שלך כבר נספר לגרסה ${draft.version}.`, targetChatId: privateTarget }, now);
     return { type: 'approval_already_counted', draftId: draft.id, approver: person.key };
   }
   db.prepare(`INSERT OR IGNORE INTO approvals
@@ -271,6 +287,7 @@ function handleApproval(db, config, event, command, draft, now) {
   const approvedKeys = new Set(db.prepare('SELECT approver_key FROM approvals WHERE draft_id=? AND approver_key IS NOT NULL').all(draft.id).map((row) => row.approver_key));
   const missing = approvers(config).filter((candidate) => !approvedKeys.has(candidate.key));
   if (missing.length) {
+    if (privateTarget) enqueue(db, { dedupeKey: `approval-private-ack:${event.id}`, body: `האישור שלך נקלט לגרסה ${draft.version}. תודה.`, targetChatId: privateTarget }, now);
     enqueue(db, { dedupeKey: `approval-progress:${event.id}`, body: `האישור של ${person.name} נקלט לגרסה ${draft.version}. ממתינים ל: ${missing.map((candidate) => candidate.name).join(', ')}.` }, now);
     return { type: 'approval_recorded', draftId: draft.id, approver: person.key, missing: missing.map((candidate) => candidate.key) };
   }
@@ -283,6 +300,7 @@ function handleApproval(db, config, event, command, draft, now) {
       .run(`publish:${draft.id}:${channel}`, JSON.stringify({ draftId: draft.id, channel }), nowIso(now), nowIso(now), nowIso(now));
   }
   db.prepare("UPDATE posts SET status='approved', updated_at=? WHERE id=?").run(nowIso(now), draft.post_id);
+  if (privateTarget) enqueue(db, { dedupeKey: `approval-private-ack:${event.id}`, body: `האישור שלך נקלט לגרסה ${draft.version}. תודה.`, targetChatId: privateTarget }, now);
   enqueue(db, { dedupeKey: `approved:${event.id}`, body: `כל ארבעת האישורים נקלטו לגרסה ${draft.version}. הפוסט הוכנס לפרסום מיידי בפייסבוק ובאינסטגרם.` }, now);
   return { type: 'approved', draftId: draft.id, channels: ['facebook', 'instagram'] };
 }
@@ -290,7 +308,7 @@ function handleApproval(db, config, event, command, draft, now) {
 function handleLatestDraftQuery(db, event, now) {
   const draft = activeDrafts(db)[0];
   if (!draft) {
-    enqueue(db, { dedupeKey: `latest-empty:${event.id}`, body: 'אין כרגע סקיצה פעילה שממתינה לאישור.' }, now);
+    enqueue(db, { dedupeKey: `latest-empty:${event.id}`, body: 'אין כרגע סקיצה פעילה שממתינה לאישור.', targetChatId: event.isPrivate ? event.chatId : null }, now);
     return { type: 'no_active_draft' };
   }
   const media = JSON.parse(draft.media_json || '[]');
@@ -301,20 +319,23 @@ function handleLatestDraftQuery(db, event, now) {
     mediaPath: media[0]?.path || null,
     entityType: 'draft',
     entityId: draft.id,
+    targetChatId: event.isPrivate ? event.chatId : null,
   }, now);
   return { type: 'latest_draft', post: draft.public_id, draftId: draft.id, version: draft.version };
 }
 
 export function ingestEvent(db, config, event, now = new Date()) {
   if (!event?.id || !event?.chatId || !event?.senderId) throw new Error('event requires id, chatId and senderId');
-  if (config.groupId && event.chatId !== config.groupId) return { type: 'ignored_chat' };
+  const privatePerson = event.isPrivate ? resolvePrivateApprover(db, config, event) : null;
+  if (config.groupId && event.chatId !== config.groupId && !event.isPrivate) return { type: 'ignored_chat' };
+  if (event.isPrivate && !privatePerson) return { type: 'ignored_private_sender' };
   const inserted = db.prepare(`INSERT OR IGNORE INTO inbound_messages
     (source_id,chat_id,sender_id,sender_name,text,reply_to_id,media_json,received_at)
     VALUES(?,?,?,?,?,?,?,?)`)
     .run(event.id, event.chatId, event.senderId, event.senderName || null, event.text || '', event.replyToId || null,
       JSON.stringify(event.media || []), event.receivedAt || nowIso(now));
   if (!inserted.changes) return { type: 'duplicate' };
-  learnApproverIdentity(db, resolveApprover(config, event), event, now);
+  if (!event.isPrivate) learnApproverIdentity(db, resolveApprover(config, event), event, now);
 
   const command = extractCommand(event.text);
   const semanticIntent = event.semantic?.intent || null;
@@ -325,6 +346,7 @@ export function ingestEvent(db, config, event, now = new Date()) {
         : command;
   const latestQuery = semanticIntent ? semanticIntent === 'latest_draft' : isLatestDraftQuery(event.text);
   let draft = findDraftByReply(db, event.replyToId, event.replyToText);
+  if (!draft && event.isPrivate && effectiveCommand.type === 'approve') draft = findPrivateReminderDraft(db, event.senderId);
   const revision = semanticIntent ? semanticIntent === 'revise_draft' : command.type === 'content' && isRevisionText(event.text);
   if (!draft && revision) {
     const active = activeDrafts(db);
@@ -355,7 +377,7 @@ export function ingestEvent(db, config, event, now = new Date()) {
     result = { type: 'paused' };
   } else if (semanticIntent === 'clarification') {
     result = { type: 'clarification_required' };
-    enqueue(db, { dedupeKey: `semantic-clarify:${event.id}`, body: event.semantic.question || 'לא ברור לי מה תרצו שאעשה. אפשר לחדד?' }, now);
+    enqueue(db, { dedupeKey: `semantic-clarify:${event.id}`, body: event.semantic.question || 'לא ברור לי מה תרצו שאעשה. אפשר לחדד?', targetChatId: event.isPrivate ? event.chatId : null }, now);
   } else if (latestQuery) {
     result = handleLatestDraftQuery(db, event, now);
   } else if (effectiveCommand.type === 'approve') {
@@ -384,6 +406,9 @@ export function ingestEvent(db, config, event, now = new Date()) {
       }
       result = { type: 'retry_queued', channels: failed.map((row) => row.channel) };
     }
+  } else if (event.isPrivate) {
+    result = { type: 'private_conversation' };
+    enqueue(db, { dedupeKey: `private-conversation:${event.id}`, body: 'קיבלתי. השיחה הזו נשארת פרטית. אם זו תשובת אישור, אפשר לכתוב כאן: מאשר. אם זו הערה לסקיצה, כתבו מה בדיוק לשנות ואעדכן את הקבוצה רק בגרסה החדשה.', targetChatId: event.chatId }, now);
   } else if (draft && revision) {
     result = reviseDraft(db, draft, event, now);
   } else if (draft && !semanticIntent) {

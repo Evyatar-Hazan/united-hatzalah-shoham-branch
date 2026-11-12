@@ -87,6 +87,58 @@ test('approval without a direct reply asks for clarification', () => {
   } finally { f.close(); }
 });
 
+test('verified private approval stays private and updates group approval status', () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-12T08:00:00.000Z');
+    ingestEvent(f.db, f.config, { id: 'draft-private', chatId: 'group@g.us', senderId: 'member', text: 'פעילות קהילתית' }, now);
+    const draft = f.db.prepare("SELECT d.*,p.public_id FROM drafts d JOIN posts p ON p.id=d.post_id WHERE d.status='pending'").get();
+    f.db.prepare(`INSERT INTO outbox
+      (dedupe_key,kind,body,entity_type,entity_id,target_chat_id,status,created_at,sent_at,platform_message_id)
+      VALUES(?,'text','תזכורת פרטית','draft',?,?, 'sent',?,?,?)`)
+      .run(`private-reminder:${draft.id}:erez`, draft.id, APPROVERS[0].senderId, now.toISOString(), now.toISOString(), 'private-reminder-message');
+    const result = ingestEvent(f.db, f.config, {
+      id: 'private-approval', chatId: APPROVERS[0].senderId, isPrivate: true,
+      senderId: APPROVERS[0].senderId, senderName: APPROVERS[0].name, text: 'מאשר',
+      semantic: { intent: 'approve_draft', channels: ['facebook', 'instagram'] },
+    }, new Date(now.getTime() + 1000));
+    assert.equal(result.type, 'approval_recorded');
+    assert.equal(f.db.prepare('SELECT approver_key FROM approvals WHERE draft_id=?').get(draft.id).approver_key, 'erez');
+    const privateAck = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key='approval-private-ack:private-approval'").get();
+    const groupStatus = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key='approval-progress:private-approval'").get();
+    assert.equal(privateAck.target_chat_id, APPROVERS[0].senderId);
+    assert.equal(groupStatus.target_chat_id, null);
+    assert.doesNotMatch(groupStatus.body, /תזכורת פרטית/);
+  } finally { f.close(); }
+});
+
+test('unknown private sender is ignored before the message is stored', () => {
+  const f = fixture();
+  try {
+    const result = ingestEvent(f.db, f.config, {
+      id: 'unknown-private', chatId: '99999@lid', isPrivate: true,
+      senderId: '99999@lid', text: 'מאשר', semantic: { intent: 'approve_draft' },
+    });
+    assert.equal(result.type, 'ignored_private_sender');
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM inbound_messages WHERE source_id='unknown-private'").get().count, 0);
+  } finally { f.close(); }
+});
+
+test('private conversation never becomes public post content', () => {
+  const f = fixture();
+  try {
+    const person = APPROVERS[0];
+    const result = ingestEvent(f.db, f.config, {
+      id: 'private-chat', chatId: person.senderId, isPrivate: true,
+      senderId: person.senderId, senderName: person.name, text: 'מה קורה?',
+      semantic: { intent: 'clarification', question: 'אפשר לחדד למה התכוונת?' },
+    });
+    assert.equal(result.type, 'clarification_required');
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM posts').get().count, 0);
+    assert.equal(f.db.prepare("SELECT target_chat_id FROM outbox WHERE dedupe_key='semantic-clarify:private-chat'").get().target_chat_id, person.senderId);
+  } finally { f.close(); }
+});
+
 test('a short yes confirms the exact draft named in the latest bot clarification', () => {
   const f = fixture();
   try {
@@ -242,6 +294,7 @@ test('pending approvers get group and targeted Hermes reminders after thirty min
     assert.equal(groupReminder.target_chat_id, null);
     const privateRows = f.db.prepare("SELECT target_chat_id FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' ORDER BY target_chat_id").all();
     assert.deepEqual(privateRows.map((row) => row.target_chat_id), ['10002@lid', '10003@lid', '10004@lid']);
+    assert.ok(f.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' AND entity_type='draft' AND entity_id IS NOT NULL").get().count === 3);
     const next = f.db.prepare("SELECT * FROM jobs WHERE job_key LIKE 'approval-reminder:%:private:2'").get();
     assert.ok(next);
   } finally { f.close(); }

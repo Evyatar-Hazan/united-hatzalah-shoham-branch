@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -11,12 +12,32 @@ logger = logging.getLogger(__name__)
 
 TARGET_CHAT = "120363432982998492@g.us"
 SPOOL_DIR = Path.home() / "Library/Application Support/ShohamSocial/intake-spool"
+DATABASE_PATH = Path.home() / "Library/Application Support/ShohamSocial/social.db"
+
+
+def _is_known_approver(sender_id: str) -> bool:
+    if not sender_id or not DATABASE_PATH.exists():
+        return False
+    try:
+        with sqlite3.connect(f"file:{DATABASE_PATH}?mode=ro", uri=True, timeout=0.2) as database:
+            row = database.execute(
+                "SELECT 1 FROM approver_identities WHERE sender_id=? LIMIT 1",
+                (sender_id,),
+            ).fetchone()
+        return row is not None
+    except sqlite3.Error:
+        logger.exception("Shoham intake could not verify private approver identity")
+        return False
 
 
 def _is_target(event: Any) -> bool:
     source = getattr(event, "source", None)
     platform = str(getattr(getattr(source, "platform", None), "value", getattr(source, "platform", ""))).lower()
-    return platform == "whatsapp" and str(getattr(source, "chat_id", "")) == TARGET_CHAT
+    chat_id = str(getattr(source, "chat_id", ""))
+    sender_id = str(getattr(event, "user_id", "") or "")
+    if platform != "whatsapp":
+        return False
+    return chat_id == TARGET_CHAT or (not chat_id.endswith("@g.us") and _is_known_approver(sender_id))
 
 
 def _message(event: Any) -> str:
@@ -30,11 +51,16 @@ def _message(event: Any) -> str:
 
 
 def _persist(event: Any) -> bool:
+    source = getattr(event, "source", None)
+    chat_id = str(getattr(source, "chat_id", "") or "")
+    source_scope = "group" if chat_id == TARGET_CHAT else "private"
     payload = {
         "session_id": "shoham-social-intake",
         "extra": {
             "platform": "whatsapp",
-            "chat_id": TARGET_CHAT,
+            "chat_id": chat_id,
+            "group_id": TARGET_CHAT,
+            "source_scope": source_scope,
             "user_message": _message(event),
             "turn_id": str(getattr(event, "message_id", "") or "event"),
             "sender_id": str(getattr(event, "user_id", "") or "unknown"),

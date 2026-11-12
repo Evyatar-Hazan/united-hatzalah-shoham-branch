@@ -13,28 +13,39 @@ try {
   const extra = payload.extra || {};
   if (extra.platform !== 'whatsapp') process.exit(0);
   const config = loadConfig();
-  if (String(extra.chat_id || '') !== String(config.groupId || '')) process.exit(0);
+  const isPrivate = extra.source_scope === 'private';
+  if (!isPrivate && String(extra.chat_id || '') !== String(config.groupId || '')) process.exit(0);
   const message = String(extra.user_message || '');
   const reply = message.match(/^\[Replying to (?:your previous message|): "([\s\S]*?)"\]\s*/);
   const text = reply ? message.slice(reply[0].length) : message;
   const rawMedia = [...message.matchAll(/(?:Image|Document|Video|Audio)[^\n]*?path:\s*`?([^`\n]+)`?/gi)].map((match) => ({ path: match[1].trim(), source: 'whatsapp' }));
   const db = openDatabase(config);
+  if (isPrivate) {
+    const known = db.prepare('SELECT 1 FROM approver_identities WHERE sender_id=? LIMIT 1').get(String(extra.sender_id || ''));
+    if (!known) {
+      db.close();
+      process.exit(0);
+    }
+  }
   const active = db.prepare(`SELECT p.public_id,d.version,d.facebook_text,d.instagram_text,d.media_json
     FROM drafts d JOIN posts p ON p.id=d.post_id
     WHERE d.status='pending' AND p.status='awaiting_approval'
     ORDER BY p.updated_at DESC LIMIT 1`).get();
-  const approvalClarification = resolveApprovalClarification(db, text);
+  const approvalClarification = isPrivate ? null : resolveApprovalClarification(db, text);
   let semantic;
   try {
-    semantic = approvalClarification ? {
+    semantic = /^(?:כן|מאשר|מאשר לפרסום)$/u.test(text.trim()) ? {
       intent: 'approve_draft',
       confidence: 1,
-      reason: 'affirmative_answer_to_exact_draft_confirmation',
-      channels: approvalClarification.channels,
+      reason: isPrivate ? 'private_approval_from_verified_approver' : 'explicit_approval',
+      channels: approvalClarification?.channels || ['facebook', 'instagram'],
       copy: null,
       replaceImage: false,
       resend: false,
       controlAction: null,
+    } : approvalClarification ? {
+      intent: 'approve_draft', confidence: 1, reason: 'affirmative_answer_to_exact_draft_confirmation',
+      channels: approvalClarification.channels, copy: null, replaceImage: false, resend: false, controlAction: null,
     } : await classifyInboundMessage(config, {
       message: text,
       isOwner: Boolean(config.ownerId && String(extra.sender_id || '') === String(config.ownerId)),
@@ -55,9 +66,15 @@ try {
     process.exit(1);
   }
   if (semantic.intent === 'group_conversation') {
-    db.close();
-    console.log(JSON.stringify({ context: 'Shoham semantic analysis identified ordinary group conversation. Reply exactly NO_REPLY.' }));
-    process.exit(0);
+    if (isPrivate) semantic = { ...semantic, intent: 'clarification', question: 'קיבלתי. אם זו תשובת אישור, אפשר לכתוב כאן: מאשר. אם זו הערה לסקיצה, כתבו מה בדיוק לשנות.' };
+    else {
+      db.close();
+      console.log(JSON.stringify({ context: 'Shoham semantic analysis identified ordinary group conversation. Reply exactly NO_REPLY.' }));
+      process.exit(0);
+    }
+  }
+  if (isPrivate && ['create_post', 'revise_draft', 'cancel_draft', 'system_control'].includes(semantic.intent)) {
+    semantic = { intent: 'clarification', confidence: 1, reason: 'private_messages_never_become_public_content', question: 'קיבלתי את ההודעה בפרטי. כדי שלא אפרש אותה בטעות כתוכן לפרסום, כתבו אם זו הערה לסקיצה או אישור.' };
   }
   const media = [];
   for (const [index, item] of rawMedia.entries()) {
@@ -66,7 +83,8 @@ try {
   }
   const result = ingestEvent(db, config, {
     id: String(extra.turn_id || `${payload.session_id}:${Date.now()}`),
-    chatId: config.groupId,
+    chatId: String(extra.chat_id || config.groupId),
+    isPrivate,
     senderId: String(extra.sender_id || 'unknown'),
     senderName: String(extra.sender_name || ''),
     text,

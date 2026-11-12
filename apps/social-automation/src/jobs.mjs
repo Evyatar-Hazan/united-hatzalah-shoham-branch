@@ -82,7 +82,7 @@ function runPrivateApprovalReminder(db, config, payload, job, now) {
   for (const person of state.missing) {
     const identity = db.prepare('SELECT sender_id FROM approver_identities WHERE approver_key=?').get(person.key);
     if (!/^\d{5,}@(lid|s\.whatsapp\.net)$/.test(String(identity?.sender_id || ''))) continue;
-    queueOutbox(db, `${job.job_key}:${person.key}`, `היי ${person.name}, סקיצה ${state.draft.public_id}, גרסה ${state.draft.version}, עדיין ממתינה לאישור שלך. אפשר לחזור לקבוצה ולהשיב ישירות לסקיצה: מאשר`, now, null, null, null, identity.sender_id);
+    queueOutbox(db, `${job.job_key}:${person.key}`, `היי ${person.name}, סקיצה ${state.draft.public_id}, גרסה ${state.draft.version}, עדיין ממתינה לאישור שלך. אפשר להשיב לי כאן בפרטי: מאשר`, now, 'draft', state.draft.id, null, identity.sender_id);
   }
   const nextRound = Number(payload.round || 1) + 1;
   const nextAt = new Date(now.getTime() + REMINDER_DELAY);
