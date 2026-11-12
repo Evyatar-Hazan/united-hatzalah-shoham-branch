@@ -77,13 +77,36 @@ function runGroupApprovalReminder(db, config, payload, job, now) {
   return { status: 'done' };
 }
 
+function reminderMediaPath(draft) {
+  try {
+    const media = JSON.parse(draft.media_json || '[]');
+    const first = media[0] || {};
+    return first.path || first.originalPath || first.variants?.facebook || first.variants?.instagram || null;
+  } catch {
+    return null;
+  }
+}
+
+function privateReminderBody(person, draft) {
+  return `היי ${person.name}, הפוסט הבא עדיין ממתין לאישור שלך:\n\nסקיצה ${draft.public_id}, גרסה ${draft.version}\n\nפייסבוק:\n${draft.facebook_text}\n\nאינסטגרם:\n${draft.instagram_text}\n\nאפשר להשיב לי כאן בפרטי: מאשר`;
+}
+
 function runPrivateApprovalReminder(db, config, payload, job, now) {
   const state = approvalState(db, config, payload.draftId);
   if (!state.active || !state.missing.length) return { status: 'done' };
   for (const person of state.missing) {
     const identity = db.prepare('SELECT sender_id FROM approver_identities WHERE approver_key=?').get(person.key);
     if (!/^\d{5,}@(lid|s\.whatsapp\.net)$/.test(String(identity?.sender_id || ''))) continue;
-    queueOutbox(db, `${job.job_key}:${person.key}`, `היי ${person.name}, סקיצה ${state.draft.public_id}, גרסה ${state.draft.version}, עדיין ממתינה לאישור שלך. אפשר להשיב לי כאן בפרטי: מאשר`, now, 'draft', state.draft.id, null, identity.sender_id);
+    queueOutbox(
+      db,
+      `${job.job_key}:${person.key}`,
+      privateReminderBody(person, state.draft),
+      now,
+      'draft',
+      state.draft.id,
+      reminderMediaPath(state.draft),
+      identity.sender_id,
+    );
   }
   const nextRound = Number(payload.round || 1) + 1;
   const nextAt = new Date(now.getTime() + REMINDER_DELAY);

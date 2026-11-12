@@ -272,15 +272,21 @@ test('an unapproved draft gets group and targeted Hermes reminders after thirty 
         text: 'הודעת קבוצה', semantic: { intent: 'group_conversation', confidence: 1 },
       }, now);
     }
-    ingestEvent(f.db, f.config, { id: 'draft', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [] }, now);
+    ingestEvent(f.db, f.config, { id: 'draft', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [{ key: 'photo', path: '/photo.jpg' }] }, now);
     const draftOutbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
     f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-message', draftOutbox.id);
     await processJobs(f.db, f.config, new Date(now.getTime() + 31 * 60_000));
     const groupReminder = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:group:message'").get();
     assert.match(groupReminder.body, /ארז, שלומי, דורי, שנהב/);
     assert.equal(groupReminder.target_chat_id, null);
-    const privateRows = f.db.prepare("SELECT target_chat_id FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' ORDER BY target_chat_id").all();
+    const privateRows = f.db.prepare("SELECT target_chat_id,body,media_path FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' ORDER BY target_chat_id").all();
     assert.deepEqual(privateRows.map((row) => row.target_chat_id), ['10001@lid', '10002@lid', '10003@lid', '10004@lid']);
+    for (const row of privateRows) {
+      assert.match(row.body, /הפוסט הבא עדיין ממתין לאישור שלך/);
+      assert.match(row.body, /פייסבוק:\nפעילות מתנדבים/);
+      assert.match(row.body, /אינסטגרם:\nפעילות מתנדבים/);
+      assert.equal(row.media_path, '/photo.jpg');
+    }
     assert.ok(f.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' AND entity_type='draft' AND entity_id IS NOT NULL").get().count === 4);
     const next = f.db.prepare("SELECT * FROM jobs WHERE job_key LIKE 'approval-reminder:%:private:2'").get();
     assert.ok(next);
