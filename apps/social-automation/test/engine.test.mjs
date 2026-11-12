@@ -471,6 +471,21 @@ test('daily proposal is idempotent, includes media, and completes both publicati
     assert.equal(proposal.media_path, '/approved.jpg');
     assert.equal(f.db.prepare("SELECT post_id FROM media_usage WHERE media_key='approved-photo'").get().post_id, post.id);
 
+    const stalePost = f.db.prepare(`INSERT INTO posts
+      (public_id,status,source_kind,brief,media_json,created_at,updated_at)
+      VALUES('STALE','awaiting_approval','whatsapp','ישן','[]',?,?)`)
+      .run(new Date(now.getTime() - 60_000).toISOString(), new Date(now.getTime() - 60_000).toISOString());
+    const staleDraft = f.db.prepare(`INSERT INTO drafts
+      (post_id,version,facebook_text,instagram_text,media_json,fingerprint,status,created_at)
+      VALUES(?,1,'ישן','ישן','[]','stale','pending',?)`)
+      .run(Number(stalePost.lastInsertRowid), new Date(now.getTime() - 60_000).toISOString());
+    f.db.prepare(`INSERT INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
+      VALUES('approval-reminder:stale:private:1','approval_private_reminder',?,'pending',?,?,?)`)
+      .run(JSON.stringify({ draftId: Number(staleDraft.lastInsertRowid), round: 1 }), new Date(now.getTime() + 60 * 60_000).toISOString(), now.toISOString(), now.toISOString());
+    f.db.prepare(`INSERT INTO outbox(dedupe_key,kind,body,entity_type,entity_id,status,created_at)
+      VALUES('approval-reminder:stale:private:1:erez','text','ישן','draft',?,'pending',?)`)
+      .run(Number(staleDraft.lastInsertRowid), now.toISOString());
+
     f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('morning-draft-message', proposal.id);
     const approvals = approve(f, 'morning-draft-message', 'morning-approval', new Date(now.getTime() + 60_000));
     assert.equal(approvals[0].type, 'approved');
@@ -490,6 +505,10 @@ test('daily proposal is idempotent, includes media, and completes both publicati
     assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM publications WHERE status='published'").get().count, 2);
     assert.equal(f.db.prepare('SELECT status FROM posts WHERE id=?').get(post.id).status, 'published');
     assert.equal(f.db.prepare('SELECT status FROM drafts WHERE id=?').get(draft.id).status, 'published');
+    assert.equal(f.db.prepare('SELECT status FROM posts WHERE id=?').get(Number(stalePost.lastInsertRowid)).status, 'cancelled');
+    assert.equal(f.db.prepare('SELECT status FROM drafts WHERE id=?').get(Number(staleDraft.lastInsertRowid)).status, 'superseded');
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE job_key='approval-reminder:stale:private:1'").get().count, 0);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE dedupe_key='approval-reminder:stale:private:1:erez'").get().count, 0);
     assert.equal(calls.length, 2);
     assert.ok(calls.every(({ type, payload }) => type === 'publishMeta' && payload.media[0].path === '/approved.jpg'));
     const volunteerShare = f.db.prepare("SELECT body FROM outbox WHERE dedupe_key=?").get(`publish:${draft.id}:volunteer-share`);

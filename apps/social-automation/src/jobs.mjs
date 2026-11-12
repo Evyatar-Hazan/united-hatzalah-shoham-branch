@@ -91,6 +91,37 @@ function privateReminderBody(person, draft) {
   return `היי ${person.name}, הפוסט הבא עדיין ממתין לאישור שלך:\n\nסקיצה ${draft.public_id}, גרסה ${draft.version}\n\nפייסבוק:\n${draft.facebook_text}\n\nאינסטגרם:\n${draft.instagram_text}\n\nאפשר להשיב לי כאן בפרטי: מאשר`;
 }
 
+function retireOlderAwaitingPosts(db, publishedDraft, now) {
+  const publishedPost = db.prepare('SELECT id,created_at FROM posts WHERE id=?').get(publishedDraft.post_id);
+  if (!publishedPost) return 0;
+  const stalePosts = db.prepare(`SELECT id FROM posts
+    WHERE status='awaiting_approval' AND id!=? AND created_at<=?`).all(publishedPost.id, publishedPost.created_at);
+  let retired = 0;
+  for (const post of stalePosts) {
+    const draftIds = db.prepare("SELECT id FROM drafts WHERE post_id=? AND status='pending'").all(post.id).map((row) => row.id);
+    db.prepare("UPDATE drafts SET status='superseded' WHERE post_id=? AND status='pending'").run(post.id);
+    db.prepare("UPDATE posts SET status='cancelled',updated_at=? WHERE id=? AND status='awaiting_approval'").run(nowIso(now), post.id);
+    for (const draftId of draftIds) {
+      db.prepare('DELETE FROM approvals WHERE draft_id=?').run(draftId);
+      db.prepare("DELETE FROM publications WHERE draft_id=? AND status!='published'").run(draftId);
+      for (const job of db.prepare(`SELECT id,payload_json FROM jobs
+        WHERE kind IN ('publish','approval_group_reminder','approval_private_reminder')
+        AND status IN ('pending','failed','running')`).all()) {
+        try {
+          if (Number(JSON.parse(job.payload_json).draftId) === Number(draftId)) db.prepare('DELETE FROM jobs WHERE id=?').run(job.id);
+        } catch {
+          // Unrelated malformed jobs stay on their normal failure path.
+        }
+      }
+      db.prepare(`DELETE FROM outbox WHERE status='pending' AND (
+        (entity_type='draft' AND entity_id=?) OR dedupe_key LIKE ?
+      )`).run(draftId, `approval-reminder:${draftId}:%`);
+    }
+    retired += 1;
+  }
+  return retired;
+}
+
 function runPrivateApprovalReminder(db, config, payload, job, now) {
   const state = approvalState(db, config, payload.draftId);
   if (!state.active || !state.missing.length) return { status: 'done' };
@@ -241,6 +272,7 @@ async function runPublishJob(db, config, services, job, payload, now) {
   if (!incomplete) {
     db.prepare("UPDATE drafts SET status='published' WHERE id=?").run(draft.id);
     db.prepare("UPDATE posts SET status='published',updated_at=? WHERE id=?").run(nowIso(now), draft.post_id);
+    retireOlderAwaitingPosts(db, draft, now);
     const links = Object.fromEntries(db.prepare("SELECT channel,url FROM publications WHERE draft_id=? AND status='published'").all(draft.id)
       .map((row) => [row.channel, row.url]));
     queueOutbox(db, `publish:${draft.id}:volunteer-share`, `הודעה מוכנה להעברה לקבוצת המתנדבים:\n\nחברים יקרים 🧡\n\nהפוסט החדש שלנו עלה עכשיו בפייסבוק ובאינסטגרם. נשמח שתיכנסו לפרגן בלייק, בתגובה ואם מתאים גם בשיתוף. כל מעורבות עוזרת לנו להגיע לעוד אנשים 🙏\n\nפייסבוק:\n${links.facebook}\n\nאינסטגרם:\n${links.instagram}\n\nתודה אלופים!`, now);
