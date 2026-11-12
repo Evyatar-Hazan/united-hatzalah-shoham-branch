@@ -127,28 +127,63 @@ function draftBody(post, version, copy, media) {
   return `סקיצה ${post.public_id} · גרסה ${version}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}${mediaLine}\n\nנדרשים ארבעה אישורים על הגרסה הזו: ארז, שלומי, דורי ושנהב. כל אחד משיב ישירות לסקיצה: מאשר`;
 }
 
+export function retireSupersededDraftWork(db, draftIds = null) {
+  const retiredDraftIds = draftIds || db.prepare("SELECT id FROM drafts WHERE status='superseded'").all().map((row) => row.id);
+  for (const draftId of retiredDraftIds) {
+    db.prepare('DELETE FROM approvals WHERE draft_id=?').run(draftId);
+    db.prepare(`DELETE FROM publications
+      WHERE draft_id=? AND status!='published'`).run(draftId);
+    const jobs = db.prepare(`SELECT id,payload_json FROM jobs
+      WHERE kind IN ('publish','approval_group_reminder','approval_private_reminder')
+      AND status IN ('pending','failed','running')`).all();
+    for (const job of jobs) {
+      try {
+        if (Number(JSON.parse(job.payload_json).draftId) === Number(draftId)) {
+          db.prepare('DELETE FROM jobs WHERE id=?').run(job.id);
+        }
+      } catch {
+        // A malformed unrelated job remains available for the normal failure path.
+      }
+    }
+    db.prepare(`DELETE FROM outbox
+      WHERE status='pending' AND (
+        (entity_type='draft' AND entity_id=?) OR dedupe_key LIKE ?
+      )`).run(draftId, `approval-reminder:${draftId}:%`);
+  }
+  return retiredDraftIds.length;
+}
+
 function createDraftVersion(db, post, copy, brief, media, now, type = 'draft_created') {
   const previous = latestDraft(db, post.id);
   const version = (previous?.version || 0) + 1;
   const value = { facebook: copy.facebook, instagram: copy.instagram, media };
   const hash = fingerprint(value);
-  db.prepare("UPDATE drafts SET status='superseded' WHERE post_id=? AND status='pending'").run(post.id);
-  const result = db.prepare(`INSERT INTO drafts
-    (post_id,version,facebook_text,instagram_text,media_json,fingerprint,status,created_at)
-    VALUES(?,?,?,?,?,?,'pending',?)`)
-    .run(post.id, version, copy.facebook, copy.instagram, JSON.stringify(media), hash, nowIso(now));
-  const draftId = Number(result.lastInsertRowid);
-  enqueue(db, {
-    dedupeKey: `draft:${draftId}`,
-    body: draftBody(post, version, copy, media),
-    mediaPath: media[0]?.path || null,
-    entityType: 'draft',
-    entityId: draftId,
-  }, now);
-  db.prepare("UPDATE posts SET status='awaiting_approval', brief=?, media_json=?, updated_at=?, expires_at=? WHERE id=?")
-    .run(brief, JSON.stringify(media), nowIso(now), new Date(now.getTime() + 72 * 60 * 60 * 1000).toISOString(), post.id);
-  scheduleApprovalReminders(db, draftId, now);
-  return { type, post: post.public_id, draftId, version };
+  const supersededIds = db.prepare("SELECT id FROM drafts WHERE post_id=? AND status='pending'").all(post.id).map((row) => row.id);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare("UPDATE drafts SET status='superseded' WHERE post_id=? AND status='pending'").run(post.id);
+    retireSupersededDraftWork(db, supersededIds);
+    const result = db.prepare(`INSERT INTO drafts
+      (post_id,version,facebook_text,instagram_text,media_json,fingerprint,status,created_at)
+      VALUES(?,?,?,?,?,?,'pending',?)`)
+      .run(post.id, version, copy.facebook, copy.instagram, JSON.stringify(media), hash, nowIso(now));
+    const draftId = Number(result.lastInsertRowid);
+    enqueue(db, {
+      dedupeKey: `draft:${draftId}`,
+      body: draftBody(post, version, copy, media),
+      mediaPath: media[0]?.path || null,
+      entityType: 'draft',
+      entityId: draftId,
+    }, now);
+    db.prepare("UPDATE posts SET status='awaiting_approval', brief=?, media_json=?, updated_at=?, expires_at=? WHERE id=?")
+      .run(brief, JSON.stringify(media), nowIso(now), new Date(now.getTime() + 72 * 60 * 60 * 1000).toISOString(), post.id);
+    scheduleApprovalReminders(db, draftId, now);
+    db.exec('COMMIT');
+    return { type, post: post.public_id, draftId, version };
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 function createDraft(db, post, brief, media, now) {

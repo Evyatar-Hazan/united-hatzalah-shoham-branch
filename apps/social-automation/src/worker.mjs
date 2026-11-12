@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig } from './config.mjs';
 import { openDatabase } from './database.mjs';
-import { expireOldWork, scheduleDueWork } from './engine.mjs';
+import { expireOldWork, retireSupersededDraftWork, scheduleDueWork } from './engine.mjs';
 import { processJobs } from './jobs.mjs';
 import { flushOutbox } from './outbox.mjs';
 import { startBrowserBridge } from './browser-bridge.mjs';
@@ -9,6 +9,7 @@ import { processIntakeSpool } from './intake-spool.mjs';
 
 const config = loadConfig();
 const db = openDatabase(config);
+retireSupersededDraftWork(db);
 const browserBridge = await startBrowserBridge(config);
 let stopping = false;
 

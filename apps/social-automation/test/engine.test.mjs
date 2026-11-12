@@ -198,11 +198,22 @@ test('a revised version resets every approval and requires a fresh four-person v
       id: 'approve-v1', chatId: 'group@g.us', senderId: first.senderId, senderName: first.name,
       text: 'מאשר', replyToId: 'draft-v1',
     }).type, 'approval_recorded');
+    const firstDraft = f.db.prepare("SELECT id FROM drafts WHERE status='pending'").get();
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE job_key LIKE ? AND kind LIKE 'approval_%'")
+      .get(`approval-reminder:${firstDraft.id}:%`).count, 2);
+    f.db.prepare(`INSERT INTO outbox(dedupe_key,kind,body,status,created_at)
+      VALUES(?,'text','תזכורת ישנה','pending',?)`)
+      .run(`approval-reminder:${firstDraft.id}:group:message`, new Date().toISOString());
     const revision = ingestEvent(f.db, f.config, {
       id: 'revise-v2', chatId: 'group@g.us', senderId: 'member', text: 'תקן את האימוג׳י ללב כתום',
     });
     assert.equal(revision.type, 'draft_revised');
     assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM approvals WHERE draft_id=?').get(revision.draftId).count, 0);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM approvals WHERE draft_id=?').get(firstDraft.id).count, 0);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE job_key LIKE ? AND kind LIKE 'approval_%'")
+      .get(`approval-reminder:${firstDraft.id}:%`).count, 0);
+    assert.equal(f.db.prepare('SELECT COUNT(*) AS count FROM outbox WHERE dedupe_key LIKE ?')
+      .get(`approval-reminder:${firstDraft.id}:%`).count, 0);
     assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE kind='publish'").get().count, 0);
   } finally { f.close(); }
 });
