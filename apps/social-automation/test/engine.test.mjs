@@ -486,6 +486,11 @@ test('daily proposal is idempotent, includes media, and completes both publicati
     assert.equal(f.db.prepare('SELECT status FROM drafts WHERE id=?').get(draft.id).status, 'published');
     assert.equal(calls.length, 2);
     assert.ok(calls.every(({ type, payload }) => type === 'publishMeta' && payload.media[0].path === '/approved.jpg'));
+    const volunteerShare = f.db.prepare("SELECT body FROM outbox WHERE dedupe_key=?").get(`publish:${draft.id}:volunteer-share`);
+    assert.match(volunteerShare.body, /הודעה מוכנה להעברה לקבוצת המתנדבים/);
+    assert.match(volunteerShare.body, /facebook\.com\/ihud\.shoham/);
+    assert.match(volunteerShare.body, /instagram\.com\/ihud\.shoham/);
+    assert.doesNotMatch(volunteerShare.body, /—/u);
   } finally { f.close(); }
 });
 

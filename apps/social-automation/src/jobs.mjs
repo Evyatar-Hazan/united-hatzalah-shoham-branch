@@ -218,8 +218,10 @@ async function runPublishJob(db, config, services, job, payload, now) {
   if (!incomplete) {
     db.prepare("UPDATE drafts SET status='published' WHERE id=?").run(draft.id);
     db.prepare("UPDATE posts SET status='published',updated_at=? WHERE id=?").run(nowIso(now), draft.post_id);
+    const links = Object.fromEntries(db.prepare("SELECT channel,url FROM publications WHERE draft_id=? AND status='published'").all(draft.id)
+      .map((row) => [row.channel, row.url]));
+    queueOutbox(db, `publish:${draft.id}:volunteer-share`, `הודעה מוכנה להעברה לקבוצת המתנדבים:\n\nחברים יקרים 🧡\n\nהפוסט החדש שלנו עלה עכשיו בפייסבוק ובאינסטגרם. נשמח שתיכנסו לפרגן בלייק, בתגובה ואם מתאים גם בשיתוף. כל מעורבות עוזרת לנו להגיע לעוד אנשים 🙏\n\nפייסבוק:\n${links.facebook}\n\nאינסטגרם:\n${links.instagram}\n\nתודה אלופים!`, now);
   }
-  queueOutbox(db, `${job.job_key}:published`, `הפרסום ב־${payload.channel} הושלם ואומת:\n${receipt.url}`, now);
   return { status: 'done' };
 }
 
