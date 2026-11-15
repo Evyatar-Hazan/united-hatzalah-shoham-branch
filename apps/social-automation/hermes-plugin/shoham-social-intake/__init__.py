@@ -34,7 +34,7 @@ def _is_target(event: Any) -> bool:
     source = getattr(event, "source", None)
     platform = str(getattr(getattr(source, "platform", None), "value", getattr(source, "platform", ""))).lower()
     chat_id = str(getattr(source, "chat_id", ""))
-    sender_id = str(getattr(event, "user_id", "") or "")
+    sender_id = str(getattr(event, "user_id", "") or getattr(source, "user_id", "") or "")
     if platform != "whatsapp":
         return False
     return chat_id == TARGET_CHAT or (not chat_id.endswith("@g.us") and _is_known_approver(sender_id))
@@ -53,6 +53,8 @@ def _message(event: Any) -> str:
 def _persist(event: Any) -> bool:
     source = getattr(event, "source", None)
     chat_id = str(getattr(source, "chat_id", "") or "")
+    sender_id = str(getattr(event, "user_id", "") or getattr(source, "user_id", "") or "unknown")
+    sender_name = str(getattr(event, "user_name", "") or getattr(source, "user_name", "") or "")
     source_scope = "group" if chat_id == TARGET_CHAT else "private"
     payload = {
         "session_id": "shoham-social-intake",
@@ -63,8 +65,8 @@ def _persist(event: Any) -> bool:
             "source_scope": source_scope,
             "user_message": _message(event),
             "turn_id": str(getattr(event, "message_id", "") or "event"),
-            "sender_id": str(getattr(event, "user_id", "") or "unknown"),
-            "sender_name": str(getattr(event, "user_name", "") or ""),
+            "sender_id": sender_id,
+            "sender_name": sender_name,
             "reply_to_is_own": bool(getattr(event, "reply_to_is_own_message", False)),
             "reply_to_id": str(getattr(event, "reply_to_message_id", "") or ""),
             "reply_to_text": str(getattr(event, "reply_to_text", "") or ""),

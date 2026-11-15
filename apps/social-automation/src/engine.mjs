@@ -11,10 +11,15 @@ const REMINDER_DELAY = 30 * 60 * 1000;
 function approvers(config) {
   return config.approvers || [
     { key: 'erez', name: 'ארז', aliases: ['ארז'] },
-    { key: 'shlomi', name: 'שלומי', aliases: ['שלומי'] },
-    { key: 'dori', name: 'דורי', aliases: ['דורי'] },
-    { key: 'shenhav', name: 'שנהב', aliases: ['שנהב'] },
   ];
+}
+
+function approvalInstruction(config) {
+  const roster = approvers(config);
+  const names = roster.map((person) => person.name).join(', ');
+  return roster.length === 1
+    ? `נדרש אישור של ${names}. יש להשיב ישירות לסקיצה: מאשר`
+    : `נדרש אישור אחד על הגרסה הזו מאחד המאשרים: ${names}. יש להשיב ישירות לסקיצה: מאשר`;
 }
 
 function resolveApprover(config, event) {
@@ -136,9 +141,9 @@ function chooseAlternativeMedia(db, currentMedia = []) {
   return { key: row.media_key, ...metadata, source: metadata.source || row.source };
 }
 
-function draftBody(post, version, copy, media) {
+function draftBody(post, version, copy, media, config) {
   const mediaLine = media.length ? `\n\nמדיה: ${media.length} קבצים מצורפים` : '\n\nמדיה: טרם צורפה';
-  return `סקיצה ${post.public_id} · גרסה ${version}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}${mediaLine}\n\nנדרש אישור אחד על הגרסה הזו מאחד המאשרים: ארז, שלומי, דורי או שנהב. יש להשיב ישירות לסקיצה: מאשר`;
+  return `סקיצה ${post.public_id} · גרסה ${version}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}${mediaLine}\n\n${approvalInstruction(config)}`;
 }
 
 export function retireSupersededDraftWork(db, draftIds = null) {
@@ -167,7 +172,7 @@ export function retireSupersededDraftWork(db, draftIds = null) {
   return retiredDraftIds.length;
 }
 
-function createDraftVersion(db, post, copy, brief, media, now, type = 'draft_created') {
+function createDraftVersion(db, config, post, copy, brief, media, now, type = 'draft_created') {
   const previous = latestDraft(db, post.id);
   const version = (previous?.version || 0) + 1;
   const value = { facebook: copy.facebook, instagram: copy.instagram, media };
@@ -184,7 +189,7 @@ function createDraftVersion(db, post, copy, brief, media, now, type = 'draft_cre
     const draftId = Number(result.lastInsertRowid);
     enqueue(db, {
       dedupeKey: `draft:${draftId}`,
-      body: draftBody(post, version, copy, media),
+      body: draftBody(post, version, copy, media, config),
       mediaPath: media[0]?.path || null,
       entityType: 'draft',
       entityId: draftId,
@@ -200,12 +205,12 @@ function createDraftVersion(db, post, copy, brief, media, now, type = 'draft_cre
   }
 }
 
-function createDraft(db, post, brief, media, now) {
+function createDraft(db, config, post, brief, media, now) {
   const copy = draftFromBrief(brief);
-  return createDraftVersion(db, post, copy, brief, media, now);
+  return createDraftVersion(db, config, post, copy, brief, media, now);
 }
 
-function reviseDraft(db, draft, event, now) {
+function reviseDraft(db, config, draft, event, now) {
   const post = db.prepare('SELECT * FROM posts WHERE id=?').get(draft.post_id);
   const currentMedia = JSON.parse(draft.media_json || post.media_json || '[]');
   let media = event.media?.length ? event.media : currentMedia;
@@ -230,7 +235,7 @@ function reviseDraft(db, draft, event, now) {
   if (unchanged && resend) {
     enqueue(db, {
       dedupeKey: `resend:${event.id}`,
-      body: draftBody(post, draft.version, copy, media),
+      body: draftBody(post, draft.version, copy, media, config),
       mediaPath: media[0]?.path || null,
       entityType: 'draft',
       entityId: draft.id,
@@ -241,7 +246,7 @@ function reviseDraft(db, draft, event, now) {
     enqueue(db, { dedupeKey: `revision-clarify:${event.id}`, body: 'לא היה ברור איזה שינוי לבצע בסקיצה הפעילה. מה בדיוק לשנות?' }, now);
     return { type: 'clarification_required' };
   }
-  return createDraftVersion(db, post, copy, post.brief, media, now, 'draft_revised');
+  return createDraftVersion(db, config, post, copy, post.brief, media, now, 'draft_revised');
 }
 
 function createPost(db, event, now) {
@@ -272,7 +277,8 @@ function handleApproval(db, config, event, command, draft, now) {
   }
   const person = event.isPrivate ? privatePerson : resolveApprover(config, event);
   if (!person) {
-    enqueue(db, { dedupeKey: `unauthorized-approval:${event.id}`, body: 'האישור לא נספר. המאשרים לגרסה הם ארז, שלומי, דורי ושנהב בלבד.', targetChatId: privateTarget }, now);
+    const allowedNames = approvers(config).map((approver) => approver.name).join(', ');
+    enqueue(db, { dedupeKey: `unauthorized-approval:${event.id}`, body: `האישור לא נספר. רק ${allowedNames} רשאי לאשר פרסום.`, targetChatId: privateTarget }, now);
     return { type: 'approval_not_counted', draftId: draft.id };
   }
   learnApproverIdentity(db, person, event, now);
@@ -298,7 +304,7 @@ function handleApproval(db, config, event, command, draft, now) {
   return { type: 'approved', draftId: draft.id, approver: person.key, channels: ['facebook', 'instagram'] };
 }
 
-function handleLatestDraftQuery(db, event, now) {
+function handleLatestDraftQuery(db, config, event, now) {
   const draft = activeDrafts(db)[0];
   if (!draft) {
     enqueue(db, { dedupeKey: `latest-empty:${event.id}`, body: 'אין כרגע סקיצה פעילה שממתינה לאישור.', targetChatId: event.isPrivate ? event.chatId : null }, now);
@@ -308,7 +314,7 @@ function handleLatestDraftQuery(db, event, now) {
   const copy = { facebook: draft.facebook_text, instagram: draft.instagram_text };
   enqueue(db, {
     dedupeKey: `latest:${event.id}`,
-    body: `זו הסקיצה הפעילה האחרונה:\n\n${draftBody(draft, draft.version, copy, media)}`,
+    body: `זו הסקיצה הפעילה האחרונה:\n\n${draftBody(draft, draft.version, copy, media, config)}`,
     mediaPath: media[0]?.path || null,
     entityType: 'draft',
     entityId: draft.id,
@@ -372,7 +378,7 @@ export function ingestEvent(db, config, event, now = new Date()) {
     result = { type: 'clarification_required' };
     enqueue(db, { dedupeKey: `semantic-clarify:${event.id}`, body: event.semantic.question || 'לא ברור לי מה תרצו שאעשה. אפשר לחדד?', targetChatId: event.isPrivate ? event.chatId : null }, now);
   } else if (latestQuery) {
-    result = handleLatestDraftQuery(db, event, now);
+    result = handleLatestDraftQuery(db, config, event, now);
   } else if (effectiveCommand.type === 'approve') {
     result = handleApproval(db, config, event, effectiveCommand, draft, now);
   } else if (effectiveCommand.type === 'cancel') {
@@ -403,10 +409,10 @@ export function ingestEvent(db, config, event, now = new Date()) {
     result = { type: 'private_conversation' };
     enqueue(db, { dedupeKey: `private-conversation:${event.id}`, body: 'קיבלתי. השיחה הזו נשארת פרטית. אם זו תשובת אישור, אפשר לכתוב כאן: מאשר. אם זו הערה לסקיצה, כתבו מה בדיוק לשנות ואעדכן את הקבוצה רק בגרסה החדשה.', targetChatId: event.chatId }, now);
   } else if (draft && revision) {
-    result = reviseDraft(db, draft, event, now);
+    result = reviseDraft(db, config, draft, event, now);
   } else if (draft && !semanticIntent) {
     const post = db.prepare('SELECT * FROM posts WHERE id=?').get(draft.post_id);
-    result = createDraft(db, post, normalize(event.text) || post.brief, event.media?.length ? event.media : JSON.parse(post.media_json), now);
+    result = createDraft(db, config, post, normalize(event.text) || post.brief, event.media?.length ? event.media : JSON.parse(post.media_json), now);
   } else if (!semanticIntent || semanticIntent === 'create_post') {
     const post = createPost(db, event, now);
     if (!normalize(event.text) && !(event.media || []).length) {
@@ -414,8 +420,8 @@ export function ingestEvent(db, config, event, now = new Date()) {
       enqueue(db, { dedupeKey: `empty:${event.id}`, body: 'לא התקבלו טקסט או תמונה. מה תרצו להכין?' }, now);
     } else {
       result = event.semantic?.copy
-        ? createDraftVersion(db, post, event.semantic.copy, event.text, event.media || [], now)
-        : createDraft(db, post, event.text, event.media || [], now);
+        ? createDraftVersion(db, config, post, event.semantic.copy, event.text, event.media || [], now)
+        : createDraft(db, config, post, event.text, event.media || [], now);
     }
   } else {
     result = { type: 'ignored_conversation' };

@@ -28,6 +28,13 @@ def _event(chat_id="120363432982998492@g.us", user_id="u1"):
     )
 
 
+def _source_identity_event(chat_id="120363432982998492@g.us", user_id="10001@lid"):
+    event = _event(chat_id, None)
+    event.source.user_id = user_id
+    event.source.user_name = "ארז אגסי סניף שוהם"
+    return event
+
+
 def test_only_target_group_is_intercepted(monkeypatch, tmp_path):
     module = _load()
     monkeypatch.setattr(module, "SPOOL_DIR", tmp_path)
@@ -42,6 +49,16 @@ def test_only_target_group_is_intercepted(monkeypatch, tmp_path):
 
     assert module._on_pre_gateway_dispatch(event=_event()) == result
     assert len(list(tmp_path.glob("*.json"))) == 1
+
+
+def test_sender_identity_falls_back_to_session_source(monkeypatch, tmp_path):
+    module = _load()
+    monkeypatch.setattr(module, "SPOOL_DIR", tmp_path)
+    result = module._on_pre_gateway_dispatch(event=_source_identity_event())
+    assert result == {"action": "skip", "reason": "shoham-social-deterministic-intake"}
+    payload = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert payload["extra"]["sender_id"] == "10001@lid"
+    assert payload["extra"]["sender_name"] == "ארז אגסי סניף שוהם"
 
 
 def test_only_verified_approver_private_messages_are_intercepted(monkeypatch, tmp_path):

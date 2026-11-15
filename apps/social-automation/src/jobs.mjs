@@ -19,10 +19,15 @@ const REMINDER_DELAY = 30 * 60 * 1000;
 function approvers(config) {
   return config.approvers || [
     { key: 'erez', name: 'ארז' },
-    { key: 'shlomi', name: 'שלומי' },
-    { key: 'dori', name: 'דורי' },
-    { key: 'shenhav', name: 'שנהב' },
   ];
+}
+
+function approvalInstruction(config) {
+  const roster = approvers(config);
+  const names = roster.map((person) => person.name).join(', ');
+  return roster.length === 1
+    ? `נדרש אישור של ${names}. יש להשיב ישירות לסקיצה: מאשר`
+    : `נדרש אישור אחד על הגרסה הזו מאחד המאשרים: ${names}. יש להשיב ישירות לסקיצה: מאשר`;
 }
 
 function runCommand(command, input) {
@@ -161,7 +166,7 @@ async function runMorningJob(db, config, services, job, now) {
     WHERE p.public_id=? ORDER BY d.version DESC LIMIT 1`).get(publicId);
   if (existing?.draft_id) {
     const draftMedia = JSON.parse(existing.media_json || '[]');
-    queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${existing.facebook_text}\n\nאינסטגרם:\n${existing.instagram_text}\n\nנדרש אישור אחד על הגרסה הזו מאחד המאשרים: ארז, שלומי, דורי או שנהב. יש להשיב ישירות לסקיצה: מאשר`, now, 'draft', existing.draft_id, draftMedia[0]?.path || null);
+    queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${existing.facebook_text}\n\nאינסטגרם:\n${existing.instagram_text}\n\n${approvalInstruction(config)}`, now, 'draft', existing.draft_id, draftMedia[0]?.path || null);
     scheduleApprovalReminders(db, existing.draft_id, now);
     return { status: 'done' };
   }
@@ -193,7 +198,7 @@ async function runMorningJob(db, config, services, job, now) {
       VALUES(?,1,?,?,?,?,'pending',?)`)
       .run(postId, copy.facebook, copy.instagram, mediaJson, media.media_key, nowIso(now));
     draftId = Number(draftResult.lastInsertRowid);
-    queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}\n\nנדרש אישור אחד על הגרסה הזו מאחד המאשרים: ארז, שלומי, דורי או שנהב. יש להשיב ישירות לסקיצה: מאשר`, now, 'draft', draftId, mediaItem.path || null);
+    queueOutbox(db, `${job.job_key}:draft`, `הצעת הבוקר ${publicId}\n\nפייסבוק:\n${copy.facebook}\n\nאינסטגרם:\n${copy.instagram}\n\n${approvalInstruction(config)}`, now, 'draft', draftId, mediaItem.path || null);
     scheduleApprovalReminders(db, draftId, now);
     db.prepare('UPDATE media_usage SET last_used_at=?,post_id=? WHERE media_key=?')
       .run(nowIso(now), postId, media.media_key);
