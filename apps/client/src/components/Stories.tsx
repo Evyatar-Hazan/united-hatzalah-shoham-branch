@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useScrollTrigger } from '../hooks/useScrollTrigger';
+import { branchStoriesFallback } from '../content/branchContent';
 import styles from './Stories.module.css';
 
 interface Story {
-  id: number;
+  id: string | number;
   title: string;
   description: string;
   image?: string;
@@ -16,7 +17,7 @@ const API_URL = import.meta.env.VITE_API_URL || '';
 const Stories: React.FC = () => {
   const { ref } = useScrollTrigger();
   const [activeStory, setActiveStory] = useState(0);
-  const [stories, setStories] = useState<Story[]>([]);
+  const [stories, setStories] = useState<Story[]>(branchStoriesFallback);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -25,10 +26,15 @@ const Stories: React.FC = () => {
         const response = await fetch(`${API_URL}/api/media/stories`);
         if (response.ok) {
           const result = await response.json();
-          setStories(result.data || []);
+          const items = Array.isArray(result.data) ? result.data : [];
+          const hasRealImages = items.some(
+            (item: Story) => item.image && !item.image.includes('placehold.co')
+          );
+          setStories(hasRealImages ? items : branchStoriesFallback);
         }
       } catch (error) {
         console.error('Failed to fetch stories:', error);
+        setStories(branchStoriesFallback);
       } finally {
         setLoading(false);
       }
@@ -66,7 +72,7 @@ const Stories: React.FC = () => {
 
   if (loading) {
     return (
-      <section ref={ref} className={`${styles.stories} section`}>
+      <section ref={ref} className={`${styles.stories} section`} id="stories">
         <div className="container">
           <h2 className={styles.title}>סיפורי הצלה מהשטח</h2>
           <p>טוען...</p>
@@ -80,9 +86,13 @@ const Stories: React.FC = () => {
   }
 
   return (
-    <section ref={ref} className={`${styles.stories} section`}>
+    <section ref={ref} className={`${styles.stories} section`} id="stories">
       <div className="container">
-        <h2 className={styles.title}>סיפורי הצלה מהשטח</h2>
+        <h2 className={styles.title}>מאחורי הפעילות</h2>
+        <p className={styles.lead}>
+          לא רק רגעי חירום. אלה הסיפורים הקטנים של המוכנות, האנשים והקהילה שמחזיקים את
+          הסניף חד, נגיש ונוכח.
+        </p>
 
         <div className={styles.carousel}>
           <div className={styles.carouselContent}>

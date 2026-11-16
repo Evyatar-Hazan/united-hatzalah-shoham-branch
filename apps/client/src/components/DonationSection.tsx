@@ -31,14 +31,17 @@ const DonationSection: React.FC = () => {
           }),
         });
 
-        if (response.ok) {
-          setShowSuccess(true);
-          setTimeout(() => {
-            setShowSuccess(false);
-            setSelectedAmount(null);
-            setCustomAmount('');
-          }, 3000);
+        const result = await response.json().catch(() => null);
+        if (!response.ok || !result?.success) {
+          throw new Error(result?.error || 'Donation request failed');
         }
+
+        setShowSuccess(true);
+        setTimeout(() => {
+          setShowSuccess(false);
+          setSelectedAmount(null);
+          setCustomAmount('');
+        }, 3000);
       } catch (error) {
         console.error('Donation error:', error);
       } finally {
@@ -48,16 +51,16 @@ const DonationSection: React.FC = () => {
   };
 
   return (
-    <section ref={ref} className={`${styles.donation} section`}>
+    <section ref={ref} className={`${styles.donation} section`} id="donate">
       <div className="container">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={isVisible ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
           transition={{ duration: 0.8 }}
         >
-          <h2 className={styles.title}>תרומה מצילת חיים</h2>
+          <h2 className={styles.title}>בקשת תרומה לסניף</h2>
           <p className={styles.subtitle}>
-            כל תרומה חשובה לנו ועוזרת לצוות שלנו להצליח בחירום
+            בחירת סכום שולחת בקשת תרומה בלבד. לא מתבצע חיוב כספי באתר.
           </p>
 
           <div className={styles.formContainer}>
@@ -103,8 +106,8 @@ const DonationSection: React.FC = () => {
             </div>
 
             <div className={styles.securityInfo}>
-              <span>🔒</span>
-              <p>התרומה מאובטחת בהצפנה SSL חזקה</p>
+              <span>ℹ️</span>
+              <p>הטופס אינו אוסף אמצעי תשלום ואינו מבצע עסקה.</p>
             </div>
 
             <motion.button
@@ -113,9 +116,9 @@ const DonationSection: React.FC = () => {
               disabled={!selectedAmount && !customAmount || isLoading}
               whileHover={{ scale: 1.02 }}
               whileTap={{ scale: 0.98 }}
-              aria-label="שלח תרומה"
+              aria-label="שלח בקשת תרומה"
             >
-              {isLoading ? 'שליחה...' : 'תרומה מהרצי'}
+              {isLoading ? 'שליחה...' : 'שליחת בקשת תרומה'}
             </motion.button>
           </div>
 
@@ -129,8 +132,8 @@ const DonationSection: React.FC = () => {
               >
                 <div className={styles.successContent}>
                   <span className={styles.checkmark}>✓</span>
-                  <h3>תודה על התרומה!</h3>
-                  <p>התרומה שלך קיבלה במהלך השנייה</p>
+                  <h3>בקשת התרומה התקבלה</h3>
+                  <p>הבקשה נשמרה בהצלחה. לא בוצע חיוב כספי.</p>
                 </div>
               </motion.div>
             )}

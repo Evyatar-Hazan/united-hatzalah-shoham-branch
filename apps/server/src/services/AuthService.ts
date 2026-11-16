@@ -2,35 +2,62 @@ import { Admin, ApiResponse } from '../types/index';
 import prisma from '../db/prisma';
 
 export class AuthService {
-  static async findOrCreateAdmin(
+  static async createAdmin(
     email: string,
     name: string,
     picture?: string
   ): Promise<ApiResponse<Admin>> {
     try {
-      let admin = await prisma.admin.findUnique({
+      const normalizedEmail = email.trim().toLowerCase();
+      const admin = await prisma.admin.create({
+        data: {
+          email: normalizedEmail,
+          name,
+          picture: picture || null,
+          isActive: true,
+        },
+      });
+      return {
+        success: true,
+        data: admin,
+        message: 'Admin created successfully',
+        timestamp: new Date(),
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to create admin',
+        timestamp: new Date(),
+      };
+    }
+  }
+
+  static async authenticateAdmin(
+    email: string,
+    name: string,
+    picture?: string
+  ): Promise<ApiResponse<Admin>> {
+    try {
+      const existing = await prisma.admin.findUnique({
         where: { email },
       });
 
-      if (!admin) {
-        admin = await prisma.admin.create({
-          data: {
-            email,
-            name,
-            picture: picture || null,
-            isActive: true,
-          },
-        });
-      } else {
-        // Update lastLogin and picture if provided
-        admin = await prisma.admin.update({
-          where: { id: admin.id },
-          data: {
-            lastLogin: new Date(),
-            ...(picture && { picture }),
-          },
-        });
+      if (!existing || !existing.isActive) {
+        return {
+          success: false,
+          error: 'Unauthorized or not an admin',
+          timestamp: new Date(),
+        };
       }
+
+      const admin = await prisma.admin.update({
+        where: { id: existing.id },
+        data: {
+          name,
+          lastLogin: new Date(),
+          ...(picture && { picture }),
+        },
+      });
 
       return {
         success: true,
@@ -97,9 +124,13 @@ export class AuthService {
 
   static async updateAdmin(id: string, updates: Partial<Admin>): Promise<ApiResponse<Admin>> {
     try {
+      const normalizedUpdates = {
+        ...updates,
+        ...(updates.email && { email: updates.email.trim().toLowerCase() }),
+      };
       const admin = await prisma.admin.update({
         where: { id },
-        data: updates,
+        data: normalizedUpdates,
       });
 
       return {

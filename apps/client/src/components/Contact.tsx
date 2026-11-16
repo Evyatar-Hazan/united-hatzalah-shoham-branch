@@ -111,7 +111,7 @@ const Contact: React.FC = () => {
   }
 
   return (
-    <section ref={ref} className={`${styles.contact} section`}>
+    <section ref={ref} className={`${styles.contact} section`} id="contact">
       <div className="container">
         <h2 className={styles.title}>יצירת קשר</h2>
         <div className={styles.content}>

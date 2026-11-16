@@ -111,33 +111,45 @@ const AdminPanel: React.FC = () => {
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  const adminFetch = React.useCallback(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    if (!token) throw new Error('Admin session is missing');
+
+    const headers = new Headers(init.headers);
+    headers.set('Authorization', `Bearer ${token}`);
+    const response = await fetch(input, { ...init, headers });
+
+    if (response.status === 401 || response.status === 403) {
+      logout();
+      throw new Error('Admin session expired');
+    }
+
+    return response;
+  }, [token, logout]);
+
   const fetchData = React.useCallback(async () => {
     if (!token) return;
     setLoading(true);
 
     try {
-      const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      };
+      const headers = { 'Content-Type': 'application/json' };
 
       if (activeTab === 'gallery') {
-        const response = await fetch(`${API_URL}/api/admin/gallery`, { headers });
+        const response = await adminFetch(`${API_URL}/api/admin/gallery`, { headers });
         const result = await response.json();
         if (result.success) setGalleryItems(result.data || []);
       } else if (activeTab === 'stories') {
-        const response = await fetch(`${API_URL}/api/admin/stories`, { headers });
+        const response = await adminFetch(`${API_URL}/api/admin/stories`, { headers });
         const result = await response.json();
         if (result.success) setStories(result.data || []);
       } else if (activeTab === 'statistics') {
-        const response = await fetch(`${API_URL}/api/admin/stat-items`, { headers });
+        const response = await adminFetch(`${API_URL}/api/admin/stat-items`, { headers });
         const result = await response.json();
         if (result.success) setStatItems(result.data || []);
       } else if (activeTab === 'contact') {
         // Fetch both contact messages and contact info
         const [messagesResponse, infoResponse] = await Promise.all([
-          fetch(`${API_URL}/api/admin/contact-messages`, { headers }),
-          fetch(`${API_URL}/api/admin/contact-info`, { headers })
+          adminFetch(`${API_URL}/api/admin/contact-messages`, { headers }),
+          adminFetch(`${API_URL}/api/admin/contact-info`, { headers })
         ]);
         
         const messagesResult = await messagesResponse.json();
@@ -146,16 +158,16 @@ const AdminPanel: React.FC = () => {
         if (messagesResult.success) setContactMessages(messagesResult.data || []);
         if (infoResult.success) setContactInfo(infoResult.data);
       } else if (activeTab === 'admins') {
-        const response = await fetch(`${API_URL}/api/admin/admins`, { headers });
+        const response = await adminFetch(`${API_URL}/api/admin/admins`, { headers });
         const result = await response.json();
         console.log('Admins response:', result);
         if (result.success) setAdmins(result.data || []);
       } else if (activeTab === 'donations') {
-        const response = await fetch(`${API_URL}/api/admin/donations`, { headers });
+        const response = await adminFetch(`${API_URL}/api/admin/donations`, { headers });
         const result = await response.json();
         if (result.success) setDonations(result.data || []);
       } else if (activeTab === 'sponsors') {
-        const response = await fetch(`${API_URL}/api/admin/donors`, { headers });
+        const response = await adminFetch(`${API_URL}/api/admin/donors`, { headers });
         const result = await response.json();
         if (result.success) setSponsors(result.data || []);
       }
@@ -164,7 +176,7 @@ const AdminPanel: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [token, activeTab]);
+  }, [token, activeTab, adminFetch]);
 
   useEffect(() => {
     if (!user?.isAdmin) {
@@ -183,10 +195,7 @@ const AdminPanel: React.FC = () => {
     if (!token || !editingItem) return;
 
     try {
-      const headers = {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      };
+      const headers = { 'Content-Type': 'application/json' };
 
       let url = '';
       let method: 'PUT' | 'POST' = 'PUT';
@@ -247,7 +256,7 @@ const AdminPanel: React.FC = () => {
         method = editingItem.id ? 'PUT' : 'POST';
       }
 
-      const response = await fetch(url, {
+      const response = await adminFetch(url, {
         method,
         headers,
         body: JSON.stringify(body),
@@ -290,10 +299,6 @@ const AdminPanel: React.FC = () => {
     if (!confirm('בטוח שברצונך למחוק?')) return;
 
     try {
-      const headers = {
-        'Authorization': `Bearer ${token}`,
-      };
-
       let url = '';
       if (activeTab === 'gallery') {
         url = `${API_URL}/api/admin/gallery/${id}`;
@@ -309,7 +314,7 @@ const AdminPanel: React.FC = () => {
         url = `${API_URL}/api/admin/donors/${id}`;
       }
 
-      const response = await fetch(url, { method: 'DELETE', headers });
+      const response = await adminFetch(url, { method: 'DELETE' });
       const result = await response.json();
 
       if (response.ok && result.success) {
@@ -334,11 +339,8 @@ const AdminPanel: React.FC = () => {
       formDataToSend.append('image', file);
       formDataToSend.append('folder', activeTab);
 
-      const response = await fetch(`${API_URL}/api/admin/upload-image`, {
+      const response = await adminFetch(`${API_URL}/api/admin/upload-image`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
         body: formDataToSend,
       });
 
@@ -446,7 +448,7 @@ const AdminPanel: React.FC = () => {
           className={activeTab === 'donations' ? styles.active : ''}
           onClick={() => setActiveTab('donations')}
         >
-          תורמים כספיים
+          בקשות תרומה
         </button>
         <button
           className={activeTab === 'sponsors' ? styles.active : ''}
@@ -891,10 +893,9 @@ const AdminPanel: React.FC = () => {
                       onClick={async () => {
                         if (!token) return;
                         try {
-                          const response = await fetch(`${API_URL}/api/admin/contact-info`, {
+                          const response = await adminFetch(`${API_URL}/api/admin/contact-info`, {
                             method: 'PUT',
                             headers: {
-                              'Authorization': `Bearer ${token}`,
                               'Content-Type': 'application/json',
                             },
                             body: JSON.stringify({
@@ -1077,11 +1078,11 @@ const AdminPanel: React.FC = () => {
 
         {activeTab === 'donations' && !loading && (
           <div className={styles.section}>
-            <h3>ניהול תורמים כספיים</h3>
+            <h3>ניהול בקשות תרומה</h3>
             <div className={styles.adminsList}>
-              <h3>רשימת תורמים ({donations.length})</h3>
+              <h3>בקשות שהתקבלו ({donations.length})</h3>
               {donations.length === 0 ? (
-                <p className={styles.emptyState}>אין תורמים כרגע</p>
+                <p className={styles.emptyState}>אין בקשות תרומה כרגע</p>
               ) : (
                 <div className={styles.grid}>
                   {donations.map((donation: Donation) => (
@@ -1094,7 +1095,7 @@ const AdminPanel: React.FC = () => {
                       </div>
                       <div className={styles.adminInfo}>
                         <p className={styles.adminDate}>
-                          סכום: ₪{donation.amount}
+                          סכום מבוקש: ₪{donation.amount}
                         </p>
                         <p className={styles.adminAddedBy}>
                           תאריך: {new Date(donation.createdAt || '').toLocaleDateString('he-IL')}
@@ -1135,15 +1136,15 @@ const AdminPanel: React.FC = () => {
 
             {editingItem && activeTab === 'donations' && (
               <div className={styles.form}>
-                <h3>עדכון סטטוס תרומה</h3>
+                <h3>עדכון סטטוס בקשת תרומה</h3>
                 <select
-                  value={formData.status || 'completed'}
+                  value={formData.status || 'pending'}
                   onChange={(e) => setFormData({ ...formData, status: e.target.value })}
                   style={{ width: '100%', padding: '12px', marginBottom: '15px', borderRadius: '6px', border: '1px solid #d0d0c8' }}
                 >
-                  <option value="pending">ממתין</option>
-                  <option value="completed">הושלם</option>
-                  <option value="failed">נכשל</option>
+                  <option value="pending">ממתינה לטיפול</option>
+                  <option value="completed">טופלה מחוץ לאתר</option>
+                  <option value="failed">בוטלה</option>
                 </select>
                 <div className={styles.formButtons}>
                   <button onClick={handleSave} className={styles.saveBtn}>

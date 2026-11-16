@@ -1,66 +1,45 @@
 import { Router, Request, Response } from 'express';
 import { AuthService } from '../services/AuthService';
+import { AuthTokenService } from '../services/AuthTokenService';
 
 const router = Router();
 
-// Google OAuth verification (refactored: expect email/name/picture)
 router.post('/google-verify', async (req: Request, res: Response) => {
   try {
-    const { email, name, picture } = req.body;
-    if (!email || !name) {
+    const { credential } = req.body;
+    if (!credential || typeof credential !== 'string') {
       res.status(400).json({
         success: false,
-        error: 'email and name are required',
+        error: 'credential is required',
         timestamp: new Date(),
       });
       return;
     }
-    const result = await AuthService.findOrCreateAdmin(email, name, picture);
+    const googleUser = await AuthTokenService.verifyGoogleIdToken(credential);
+    const result = await AuthService.authenticateAdmin(
+      googleUser.email,
+      googleUser.name,
+      googleUser.picture
+    );
 
-    // Add isAdmin flag to the response data
-    if (result.success && result.data) {
-      res.json({
-        ...result,
-        data: {
-          ...result.data,
-          isAdmin: true,
-        },
-      });
-    } else {
-      res.json(result);
+    if (!result.success || !result.data) {
+      res.status(403).json(result);
+      return;
     }
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Internal server error',
-      timestamp: new Date(),
+
+    const sessionToken = await AuthTokenService.issueAdminSession(result.data);
+    res.json({
+      ...result,
+      data: {
+        ...result.data,
+        isAdmin: true,
+        sessionToken,
+      },
     });
-  }
-});
-
-// Check if user is admin (refactored)
-router.post('/check-admin', async (req: Request, res: Response) => {
-  try {
-    const { email } = req.body;
-    if (!email) {
-      res.status(400).json({
-        success: false,
-        error: 'email is required',
-        timestamp: new Date(),
-      });
-      return;
-    }
-    const adminsRes = await AuthService.getAdmins();
-    if (!adminsRes.success || !adminsRes.data) {
-      res.status(500).json(adminsRes);
-      return;
-    }
-    const isAdmin = adminsRes.data.some(a => a.email === email);
-    res.json({ success: true, data: { isAdmin }, timestamp: new Date() });
-  } catch (error) {
-    res.status(500).json({
+  } catch {
+    res.status(401).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Internal server error',
+      error: 'Authentication failed',
       timestamp: new Date(),
     });
   }
