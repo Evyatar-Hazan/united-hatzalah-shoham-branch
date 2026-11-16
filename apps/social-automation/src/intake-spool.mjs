@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
@@ -50,6 +51,50 @@ function retryPayload(spoolDir, claimedPath, originalName, payload, error, now) 
   rmSync(claimedPath, { force: true });
 }
 
+function receiptFields(payload, now) {
+  const extra = payload?.extra || {};
+  return {
+    sourceId: String(extra.turn_id || ''),
+    chatId: String(extra.chat_id || ''),
+    senderId: String(extra.sender_id || 'unknown'),
+    receivedAt: String(extra.received_at || now.toISOString()),
+    payloadHash: createHash('sha256').update(JSON.stringify(payload)).digest('hex'),
+  };
+}
+
+export function recordIntakeReceipt(db, payload, now = new Date()) {
+  if (!db) return null;
+  const receipt = receiptFields(payload, now);
+  if (!receipt.sourceId || !receipt.chatId) throw new Error('intake_receipt_missing_identity');
+  db.prepare(`INSERT OR IGNORE INTO intake_receipts
+    (source_id,chat_id,sender_id,payload_hash,received_at,reconciliation_status)
+    VALUES(?,?,?,?,?,'received')`)
+    .run(receipt.sourceId, receipt.chatId, receipt.senderId, receipt.payloadHash, receipt.receivedAt);
+  return receipt;
+}
+
+export function reconcileIntakeReceipt(db, config, sourceId, now = new Date()) {
+  if (!db || !sourceId) return { status: 'skipped' };
+  const inbound = db.prepare('SELECT id FROM inbound_messages WHERE source_id=?').get(sourceId);
+  if (inbound) {
+    db.prepare(`UPDATE intake_receipts SET hook_completed_at=?,reconciled_at=?,reconciliation_status='matched'
+      WHERE source_id=?`).run(now.toISOString(), now.toISOString(), sourceId);
+    db.prepare("UPDATE intake_integrity_alerts SET status='resolved',resolved_at=? WHERE alert_key=? AND status='open'")
+      .run(now.toISOString(), `missing-inbound:${sourceId}`);
+    return { status: 'matched' };
+  }
+  const details = JSON.stringify({ sourceId, detectedAt: now.toISOString() });
+  db.prepare(`INSERT OR IGNORE INTO intake_integrity_alerts(alert_key,kind,details_json,status,created_at)
+    VALUES(?,'missing_inbound',?,'open',?)`).run(`missing-inbound:${sourceId}`, details, now.toISOString());
+  if (/^\d{5,}@(lid|s\.whatsapp\.net)$/.test(String(config?.ownerId || ''))) {
+    db.prepare(`INSERT OR IGNORE INTO outbox
+      (dedupe_key,kind,body,target_chat_id,status,created_at)
+      VALUES(?,'text',?,?,'pending',?)`)
+      .run(`intake-integrity:${sourceId}`, 'התראת מערכת: התקבלה הודעה בהרמס אך היא עדיין לא נשמרה ביומן הסושיאל. המערכת תמשיך לנסות אוטומטית ולא תבצע פעולה על תוכן חסר.', config.ownerId, now.toISOString());
+  }
+  return { status: 'missing' };
+}
+
 export async function processIntakeSpool(config, now = new Date(), options = {}) {
   const spoolDir = config.intakeSpoolDir;
   mkdirSync(spoolDir, { recursive: true, mode: 0o700 });
@@ -79,7 +124,10 @@ export async function processIntakeSpool(config, now = new Date(), options = {})
         renameSync(claimedPath, pendingPath);
         continue;
       }
+      const receipt = recordIntakeReceipt(options.db, payload, now);
       await execute(payload);
+      const reconciliation = reconcileIntakeReceipt(options.db, config, receipt?.sourceId, now);
+      if (reconciliation.status === 'missing') throw new Error('intake_reconciliation_missing_inbound');
       rmSync(claimedPath, { force: true });
       results.push({ file: basename(originalName), status: 'processed' });
     } catch (error) {

@@ -7,6 +7,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const MORNING_RETRY_COOLDOWN = 15 * 60 * 1000;
 const STALE_JOB_TIMEOUT = 10 * 60 * 1000;
 const REMINDER_DELAY = 30 * 60 * 1000;
+const PRIVATE_REMINDER_DELAY = 2 * 60 * 60 * 1000;
 
 function approvers(config) {
   return config.approvers || [
@@ -22,29 +23,33 @@ function approvalInstruction(config) {
     : `נדרש אישור אחד על הגרסה הזו מאחד המאשרים: ${names}. יש להשיב ישירות לסקיצה: מאשר`;
 }
 
-function resolveApprover(config, event) {
-  const senderName = normalize(event.senderName || '');
-  const senderId = String(event.senderId || '');
-  return approvers(config).find((person) => person.senderId === senderId
-    || [person.name, ...(person.aliases || [])].some((alias) => senderName.includes(normalize(alias))));
+function eventSenderIds(event) {
+  return [...new Set([event.senderId, ...(event.senderIds || [])].map(String).filter(Boolean))];
 }
 
-function resolvePrivateApprover(db, config, event) {
-  const identity = db.prepare('SELECT approver_key FROM approver_identities WHERE sender_id=?').get(String(event.senderId || ''));
+function resolveApprover(db, config, event) {
+  const senderName = normalize(event.senderName || '');
+  const senderIds = eventSenderIds(event);
+  const direct = approvers(config).find((person) => senderIds.includes(String(person.senderId || ''))
+    || [person.name, ...(person.aliases || [])].some((alias) => senderName.includes(normalize(alias))));
+  if (direct) return direct;
+  const identity = senderIds.map((senderId) => db.prepare('SELECT approver_key FROM approver_identities WHERE sender_id=?').get(senderId)).find(Boolean);
   return identity ? approvers(config).find((person) => person.key === identity.approver_key) : null;
 }
 
 function learnApproverIdentity(db, person, event, now) {
-  if (!person || !/^\d{5,}@(lid|s\.whatsapp\.net)$/.test(String(event.senderId || ''))) return;
-  db.prepare(`INSERT INTO approver_identities(approver_key,display_name,sender_id,updated_at)
-    VALUES(?,?,?,?) ON CONFLICT(approver_key) DO UPDATE SET
-    display_name=excluded.display_name,sender_id=excluded.sender_id,updated_at=excluded.updated_at`)
-    .run(person.key, person.name, event.senderId, nowIso(now));
+  if (!person) return;
+  for (const senderId of eventSenderIds(event).filter((value) => /^\d{5,}@(lid|s\.whatsapp\.net)$/.test(value))) {
+    db.prepare(`INSERT INTO approver_identities(approver_key,display_name,sender_id,updated_at)
+      VALUES(?,?,?,?) ON CONFLICT(approver_key,sender_id) DO UPDATE SET
+      display_name=excluded.display_name,updated_at=excluded.updated_at`)
+      .run(person.key, person.name, senderId, nowIso(now));
+  }
 }
 
 function scheduleApprovalReminders(db, draftId, now) {
   const groupAt = new Date(now.getTime() + REMINDER_DELAY);
-  const privateAt = groupAt;
+  const privateAt = new Date(now.getTime() + PRIVATE_REMINDER_DELAY);
   db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
     VALUES(?,'approval_group_reminder',?,'pending',?,?,?)`)
     .run(`approval-reminder:${draftId}:group`, JSON.stringify({ draftId }), nowIso(groupAt), nowIso(now), nowIso(now));
@@ -172,6 +177,16 @@ export function retireSupersededDraftWork(db, draftIds = null) {
   return retiredDraftIds.length;
 }
 
+export function retireInactiveDrafts(db) {
+  const rows = db.prepare(`SELECT d.id FROM drafts d JOIN posts p ON p.id=d.post_id
+    WHERE d.status='pending' AND p.status IN ('expired','cancelled','published')`).all();
+  if (!rows.length) return 0;
+  const ids = rows.map((row) => row.id);
+  for (const id of ids) db.prepare("UPDATE drafts SET status='superseded' WHERE id=?").run(id);
+  retireSupersededDraftWork(db, ids);
+  return ids.length;
+}
+
 function createDraftVersion(db, config, post, copy, brief, media, now, type = 'draft_created') {
   const previous = latestDraft(db, post.id);
   const version = (previous?.version || 0) + 1;
@@ -261,7 +276,6 @@ function createPost(db, event, now) {
 
 function handleApproval(db, config, event, command, draft, now) {
   const privateTarget = event.isPrivate ? event.chatId : null;
-  const privatePerson = event.isPrivate ? resolvePrivateApprover(db, config, event) : null;
   if (!draft) {
     enqueue(db, { dedupeKey: `clarify:${event.id}`, body: 'לא מצאתי בוודאות איזו סקיצה לאשר. נא להשיב ישירות לתזכורת הפרטית של הסקיצה.', targetChatId: privateTarget }, now);
     return { type: 'clarification_required' };
@@ -275,7 +289,7 @@ function handleApproval(db, config, event, command, draft, now) {
     enqueue(db, { dedupeKey: `expired:${event.id}`, body: 'תוקף הסקיצה פג לאחר 72 שעות. אכין גרסה עדכנית לאישור חדש.', targetChatId: privateTarget }, now);
     return { type: 'approval_expired' };
   }
-  const person = event.isPrivate ? privatePerson : resolveApprover(config, event);
+  const person = resolveApprover(db, config, event);
   if (!person) {
     const allowedNames = approvers(config).map((approver) => approver.name).join(', ');
     enqueue(db, { dedupeKey: `unauthorized-approval:${event.id}`, body: `האישור לא נספר. רק ${allowedNames} רשאי לאשר פרסום.`, targetChatId: privateTarget }, now);
@@ -323,18 +337,40 @@ function handleLatestDraftQuery(db, config, event, now) {
   return { type: 'latest_draft', post: draft.public_id, draftId: draft.id, version: draft.version };
 }
 
-export function ingestEvent(db, config, event, now = new Date()) {
+export function recordInboundEvent(db, config, event, now = new Date()) {
   if (!event?.id || !event?.chatId || !event?.senderId) throw new Error('event requires id, chatId and senderId');
-  const privatePerson = event.isPrivate ? resolvePrivateApprover(db, config, event) : null;
+  const privatePerson = event.isPrivate ? resolveApprover(db, config, event) : null;
   if (config.groupId && event.chatId !== config.groupId && !event.isPrivate) return { type: 'ignored_chat' };
   if (event.isPrivate && !privatePerson) return { type: 'ignored_private_sender' };
   const inserted = db.prepare(`INSERT OR IGNORE INTO inbound_messages
-    (source_id,chat_id,sender_id,sender_name,text,reply_to_id,media_json,received_at)
-    VALUES(?,?,?,?,?,?,?,?)`)
+    (source_id,chat_id,sender_id,sender_name,text,reply_to_id,reply_to_text,reply_to_is_own,
+      media_json,received_at,is_private,classification_json,processing_status)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(event.id, event.chatId, event.senderId, event.senderName || null, event.text || '', event.replyToId || null,
-      JSON.stringify(event.media || []), event.receivedAt || nowIso(now));
-  if (!inserted.changes) return { type: 'duplicate' };
-  if (!event.isPrivate) learnApproverIdentity(db, resolveApprover(config, event), event, now);
+      event.replyToText || null, event.replyToIsOwn ? 1 : 0, JSON.stringify(event.media || []),
+      event.receivedAt || nowIso(now), event.isPrivate ? 1 : 0,
+      event.semantic ? JSON.stringify(event.semantic) : null, event.semantic ? 'classified' : 'received');
+  if (inserted.changes && !event.isPrivate) learnApproverIdentity(db, resolveApprover(db, config, event), event, now);
+  const row = db.prepare('SELECT id,processed_at,processing_status FROM inbound_messages WHERE source_id=?').get(event.id);
+  return { type: inserted.changes ? 'recorded' : 'existing', inserted: Boolean(inserted.changes), row };
+}
+
+export function markInboundClassificationFailure(db, sourceId, error, now = new Date()) {
+  const result = { type: 'classification_failed', error: String(error?.message || error || 'semantic_analysis_failed').slice(0, 500) };
+  db.prepare(`UPDATE inbound_messages SET processing_status='classification_failed',result_json=? WHERE source_id=?`)
+    .run(JSON.stringify(result), sourceId);
+  return result;
+}
+
+export function ingestEvent(db, config, event, now = new Date()) {
+  const recorded = recordInboundEvent(db, config, event, now);
+  if (recorded.type === 'ignored_chat' || recorded.type === 'ignored_private_sender') return recorded;
+  if (!recorded.inserted && recorded.row?.processed_at) return { type: 'duplicate' };
+  db.prepare(`UPDATE inbound_messages SET sender_id=?,sender_name=?,text=?,reply_to_id=?,reply_to_text=?,
+    reply_to_is_own=?,media_json=?,classification_json=?,processing_status='classified' WHERE source_id=?`)
+    .run(event.senderId, event.senderName || null, event.text || '', event.replyToId || null,
+      event.replyToText || null, event.replyToIsOwn ? 1 : 0, JSON.stringify(event.media || []),
+      event.semantic ? JSON.stringify(event.semantic) : null, event.id);
 
   const command = extractCommand(event.text);
   const semanticIntent = event.semantic?.intent || null;
@@ -356,7 +392,7 @@ export function ingestEvent(db, config, event, now = new Date()) {
         ? 'יש יותר מסקיצה פעילה אחת. נא להשיב ישירות לסקיצה שברצונכם לשנות.'
         : 'אין כרגע סקיצה פעילה לשינוי. שלחו תמונה וטקסט או כתבו איזה פוסט חדש להכין.';
       enqueue(db, { dedupeKey: `revision-target:${event.id}`, body }, now);
-      db.prepare('UPDATE inbound_messages SET processed_at=?, result_json=? WHERE source_id=?')
+      db.prepare("UPDATE inbound_messages SET processed_at=?,processing_status='processed',result_json=? WHERE source_id=?")
         .run(nowIso(now), JSON.stringify(result), event.id);
       return result;
     }
@@ -426,7 +462,7 @@ export function ingestEvent(db, config, event, now = new Date()) {
   } else {
     result = { type: 'ignored_conversation' };
   }
-  db.prepare('UPDATE inbound_messages SET processed_at=?, result_json=? WHERE source_id=?')
+  db.prepare("UPDATE inbound_messages SET processed_at=?,processing_status='processed',result_json=? WHERE source_id=?")
     .run(nowIso(now), JSON.stringify(result), event.id);
   return result;
 }

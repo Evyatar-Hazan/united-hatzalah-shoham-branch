@@ -10,7 +10,7 @@ import { openDatabase } from '../src/database.mjs';
 const hook = fileURLToPath(new URL('../scripts/hermes-ingest-hook.mjs', import.meta.url));
 const groupId = 'test-group@g.us';
 
-function runHook(chatId) {
+function runHook(chatId, semanticDecision = '{"intent":"create_post","confidence":0.99,"reason":"explicit request","question":null,"channels":[]}') {
   const dataDir = mkdtempSync(join(tmpdir(), 'shoham-hook-'));
   const result = spawnSync(process.execPath, [hook], {
     input: JSON.stringify({
@@ -32,7 +32,7 @@ function runHook(chatId) {
       SOCIAL_WHATSAPP_DRY_RUN: 'true',
       SOCIAL_META_DRY_RUN: 'true',
       NODE_ENV: 'test',
-      SOCIAL_SEMANTIC_DECISION_JSON: '{"intent":"create_post","confidence":0.99,"reason":"explicit request","question":null,"channels":[]}',
+      SOCIAL_SEMANTIC_DECISION_JSON: semanticDecision,
     },
   });
   return { dataDir, result };
@@ -55,6 +55,22 @@ test('Hermes ingest hook accepts the configured WhatsApp group', () => {
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Shoham social workflow result/);
     assert.equal(existsSync(join(dataDir, 'social.db')), true);
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('Hermes ingest hook stores ordinary group conversation before ignoring it', () => {
+  const { dataDir, result } = runHook(groupId, '{"intent":"group_conversation","confidence":0.99,"reason":"ordinary discussion","question":null,"channels":[]}');
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    const check = openDatabase({ dataDir, dbPath: join(dataDir, 'social.db'), mediaDir: join(dataDir, 'media'), groupId, approvers: [] });
+    const row = check.prepare('SELECT text,processing_status,classification_json,result_json FROM inbound_messages').get();
+    assert.equal(row.text, 'תכין פוסט חדש על פעילות קהילתית');
+    assert.equal(row.processing_status, 'processed');
+    assert.match(row.classification_json, /group_conversation/);
+    assert.match(row.result_json, /ignored_conversation/);
+    check.close();
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }

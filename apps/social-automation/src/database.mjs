@@ -22,7 +22,31 @@ CREATE TABLE IF NOT EXISTS inbound_messages (
   media_json TEXT NOT NULL DEFAULT '[]',
   received_at TEXT NOT NULL,
   processed_at TEXT,
-  result_json TEXT
+  result_json TEXT,
+  is_private INTEGER NOT NULL DEFAULT 0,
+  reply_to_text TEXT,
+  reply_to_is_own INTEGER NOT NULL DEFAULT 0,
+  classification_json TEXT,
+  processing_status TEXT NOT NULL DEFAULT 'received'
+);
+CREATE TABLE IF NOT EXISTS intake_receipts (
+  source_id TEXT PRIMARY KEY,
+  chat_id TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  payload_hash TEXT NOT NULL,
+  received_at TEXT NOT NULL,
+  hook_completed_at TEXT,
+  reconciled_at TEXT,
+  reconciliation_status TEXT NOT NULL DEFAULT 'received'
+);
+CREATE TABLE IF NOT EXISTS intake_integrity_alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  alert_key TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  details_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  resolved_at TEXT
 );
 CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,10 +83,12 @@ CREATE TABLE IF NOT EXISTS approvals (
   approved_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS approver_identities (
-  approver_key TEXT PRIMARY KEY,
+  approver_key TEXT NOT NULL,
   display_name TEXT NOT NULL,
-  sender_id TEXT NOT NULL UNIQUE,
-  updated_at TEXT NOT NULL
+  sender_id TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(approver_key, sender_id),
+  UNIQUE(sender_id)
 );
 CREATE TABLE IF NOT EXISTS publications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +141,7 @@ CREATE TABLE IF NOT EXISTS media_usage (
 CREATE INDEX IF NOT EXISTS idx_jobs_ready ON jobs(status, run_after);
 CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox(status, id);
 CREATE INDEX IF NOT EXISTS idx_posts_status ON posts(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_intake_receipts_status ON intake_receipts(reconciliation_status, received_at);
 `;
 
 export function openDatabase(config) {
@@ -122,6 +149,24 @@ export function openDatabase(config) {
   mkdirSync(config.mediaDir, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(config.dbPath);
   db.exec(SCHEMA);
+  const identityColumns = db.prepare('PRAGMA table_info(approver_identities)').all();
+  const compositeIdentityKey = identityColumns.filter((column) => column.pk > 0).length === 2;
+  if (!compositeIdentityKey) {
+    db.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE approver_identities_v2 (
+        approver_key TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(approver_key, sender_id),
+        UNIQUE(sender_id)
+      );
+      INSERT OR IGNORE INTO approver_identities_v2(approver_key,display_name,sender_id,updated_at)
+        SELECT approver_key,display_name,sender_id,updated_at FROM approver_identities;
+      DROP TABLE approver_identities;
+      ALTER TABLE approver_identities_v2 RENAME TO approver_identities;
+      COMMIT;`);
+  }
   const approvalColumns = db.prepare('PRAGMA table_info(approvals)').all();
   if (!approvalColumns.some((column) => column.name === 'approver_key')) {
     db.exec('ALTER TABLE approvals ADD COLUMN approver_key TEXT');
@@ -130,6 +175,19 @@ export function openDatabase(config) {
   if (!outboxColumns.some((column) => column.name === 'target_chat_id')) {
     db.exec('ALTER TABLE outbox ADD COLUMN target_chat_id TEXT');
   }
+  const inboundColumns = db.prepare('PRAGMA table_info(inbound_messages)').all();
+  const inboundMigrations = [
+    ['is_private', 'INTEGER NOT NULL DEFAULT 0'],
+    ['reply_to_text', 'TEXT'],
+    ['reply_to_is_own', 'INTEGER NOT NULL DEFAULT 0'],
+    ['classification_json', 'TEXT'],
+    ['processing_status', "TEXT NOT NULL DEFAULT 'received'"],
+  ];
+  for (const [name, definition] of inboundMigrations) {
+    if (!inboundColumns.some((column) => column.name === name)) {
+      db.exec(`ALTER TABLE inbound_messages ADD COLUMN ${name} ${definition}`);
+    }
+  }
   for (const person of config.approvers || []) {
     const aliases = [person.name, ...(person.aliases || [])].filter(Boolean);
     const historical = aliases.map((alias) => db.prepare(`SELECT sender_id,sender_name FROM inbound_messages
@@ -137,8 +195,8 @@ export function openDatabase(config) {
     const senderId = [person.senderId, historical?.sender_id].find(isWhatsAppJid);
     if (!senderId) continue;
     db.prepare(`INSERT INTO approver_identities(approver_key,display_name,sender_id,updated_at)
-      VALUES(?,?,?,?) ON CONFLICT(approver_key) DO UPDATE SET
-      display_name=excluded.display_name,sender_id=excluded.sender_id,updated_at=excluded.updated_at`)
+      VALUES(?,?,?,?) ON CONFLICT(approver_key,sender_id) DO UPDATE SET
+      display_name=excluded.display_name,updated_at=excluded.updated_at`)
       .run(person.key, person.name, senderId, nowIso());
   }
   return db;

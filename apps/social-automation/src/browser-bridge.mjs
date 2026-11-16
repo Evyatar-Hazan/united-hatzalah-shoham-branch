@@ -5,6 +5,12 @@ import { basename, extname, join, resolve } from 'node:path';
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 
+function commandCapability(type) {
+  if (type === 'syncGooglePhotos') return 'google';
+  if (type === 'prepareMetaPost' || type === 'publishMeta') return 'meta';
+  return 'any';
+}
+
 function tokenMatches(actual, expected) {
   const left = Buffer.from(String(actual || ''));
   const right = Buffer.from(String(expected || ''));
@@ -89,7 +95,13 @@ export async function startBrowserBridge(config) {
         return json(res, 200, { success: true, connected: true, lastSeenAt, pending: pending.length, inflight: inflight.size });
       }
       if (req.method === 'GET' && url.pathname === '/next') {
-        const command = pending.shift() || null;
+        const capabilities = new Set((url.searchParams.get('capability') || 'none')
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean));
+        const index = pending.findIndex((item) => commandCapability(item.type) === 'any'
+          || capabilities.has(commandCapability(item.type)));
+        const command = index >= 0 ? pending.splice(index, 1)[0] : null;
         if (command) inflight.set(command.id, command);
         return json(res, 200, { success: true, command });
       }

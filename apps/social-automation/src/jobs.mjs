@@ -15,6 +15,7 @@ export const APPROVED_ALBUMS = [
 ];
 export const EXCLUDED_ALBUMS = ['רגעים של אור (יומיים אחרונים במחנה חנוכה)'];
 const REMINDER_DELAY = 30 * 60 * 1000;
+const PRIVATE_REMINDER_DELAY = 2 * 60 * 60 * 1000;
 
 function approvers(config) {
   return config.approvers || [
@@ -57,7 +58,7 @@ function chooseMedia(db, now) {
 
 function scheduleApprovalReminders(db, draftId, now) {
   const groupAt = new Date(now.getTime() + REMINDER_DELAY);
-  const privateAt = groupAt;
+  const privateAt = new Date(now.getTime() + PRIVATE_REMINDER_DELAY);
   db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
     VALUES(?,'approval_group_reminder',?,'pending',?,?,?)`)
     .run(`approval-reminder:${draftId}:group`, JSON.stringify({ draftId }), nowIso(groupAt), nowIso(now), nowIso(now));
@@ -131,7 +132,8 @@ function runPrivateApprovalReminder(db, config, payload, job, now) {
   const state = approvalState(db, config, payload.draftId);
   if (!state.active || !state.missing.length) return { status: 'done' };
   for (const person of state.missing) {
-    const identity = db.prepare('SELECT sender_id FROM approver_identities WHERE approver_key=?').get(person.key);
+    const identity = db.prepare(`SELECT sender_id FROM approver_identities WHERE approver_key=?
+      ORDER BY CASE WHEN sender_id LIKE '%@s.whatsapp.net' THEN 0 ELSE 1 END, updated_at DESC LIMIT 1`).get(person.key);
     if (!/^\d{5,}@(lid|s\.whatsapp\.net)$/.test(String(identity?.sender_id || ''))) continue;
     queueOutbox(
       db,
@@ -145,7 +147,7 @@ function runPrivateApprovalReminder(db, config, payload, job, now) {
     );
   }
   const nextRound = Number(payload.round || 1) + 1;
-  const nextAt = new Date(now.getTime() + REMINDER_DELAY);
+  const nextAt = new Date(now.getTime() + PRIVATE_REMINDER_DELAY);
   db.prepare(`INSERT OR IGNORE INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
     VALUES(?,'approval_private_reminder',?,'pending',?,?,?)`)
     .run(`approval-reminder:${payload.draftId}:private:${nextRound}`, JSON.stringify({ draftId: payload.draftId, round: nextRound }), nowIso(nextAt), nowIso(now), nowIso(now));

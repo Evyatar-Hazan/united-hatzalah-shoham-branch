@@ -32,6 +32,8 @@ function status() {
     posts: db.prepare('SELECT status, COUNT(*) AS count FROM posts GROUP BY status').all(),
     jobs: db.prepare('SELECT status, COUNT(*) AS count FROM jobs GROUP BY status').all(),
     outbox: db.prepare('SELECT status, COUNT(*) AS count FROM outbox GROUP BY status').all(),
+    intakeReceipts: db.prepare('SELECT reconciliation_status AS status,COUNT(*) AS count FROM intake_receipts GROUP BY reconciliation_status').all(),
+    intakeAlerts: db.prepare('SELECT status,COUNT(*) AS count FROM intake_integrity_alerts GROUP BY status').all(),
     lastInboundId: db.prepare('SELECT MAX(id) AS id FROM inbound_messages').get().id || 0,
   };
 }
@@ -59,7 +61,7 @@ async function main() {
   }
   if (command === 'status') return status();
   if (command === 'reset-dry-run') {
-    db.exec("DELETE FROM approvals; DELETE FROM publications; DELETE FROM drafts; DELETE FROM posts; DELETE FROM inbound_messages; DELETE FROM jobs; DELETE FROM outbox;");
+    db.exec("DELETE FROM approvals; DELETE FROM publications; DELETE FROM drafts; DELETE FROM posts; DELETE FROM inbound_messages; DELETE FROM intake_receipts; DELETE FROM intake_integrity_alerts; DELETE FROM jobs; DELETE FROM outbox;");
     return { reset: true };
   }
   throw new Error(`unknown command: ${command}`);

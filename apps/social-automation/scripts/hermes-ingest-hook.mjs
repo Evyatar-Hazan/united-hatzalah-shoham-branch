@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { openDatabase } from '../src/database.mjs';
 import { loadConfig } from '../src/config.mjs';
-import { ingestEvent, resolveApprovalClarification } from '../src/engine.mjs';
+import { ingestEvent, markInboundClassificationFailure, recordInboundEvent, resolveApprovalClarification } from '../src/engine.mjs';
 import { prepareMediaVariants } from '../src/media-processor.mjs';
 import { flushOutbox } from '../src/outbox.mjs';
 import { classifyInboundMessage } from '../src/semantic-router.mjs';
+import { resolveWhatsAppSenderIds } from '../src/whatsapp-identity.mjs';
 
 let input = '';
 for await (const chunk of process.stdin) input += chunk;
@@ -19,14 +20,36 @@ try {
   const reply = message.match(/^\[Replying to (?:your previous message|): "([\s\S]*?)"\]\s*/);
   const text = reply ? message.slice(reply[0].length) : message;
   const rawMedia = [...message.matchAll(/(?:Image|Document|Video|Audio)[^\n]*?path:\s*`?([^`\n]+)`?/gi)].map((match) => ({ path: match[1].trim(), source: 'whatsapp' }));
+  const senderIds = await resolveWhatsAppSenderIds({
+    bridgeUrl: config.bridgeUrl,
+    chatId: String(extra.chat_id || config.groupId),
+    senderId: String(extra.sender_id || ''),
+    isPrivate,
+  });
   const db = openDatabase(config);
   if (isPrivate) {
-    const known = db.prepare('SELECT 1 FROM approver_identities WHERE sender_id=? LIMIT 1').get(String(extra.sender_id || ''));
+    const known = senderIds.map((senderId) => db.prepare('SELECT 1 FROM approver_identities WHERE sender_id=? LIMIT 1').get(senderId)).find(Boolean);
     if (!known) {
       db.close();
       process.exit(0);
     }
   }
+  const sourceId = String(extra.turn_id || `${payload.session_id}:${Date.now()}`);
+  const baseEvent = {
+    id: sourceId,
+    chatId: String(extra.chat_id || config.groupId),
+    isPrivate,
+    senderId: String(extra.sender_id || 'unknown'),
+    senderIds,
+    senderName: String(extra.sender_name || ''),
+    text,
+    replyToId: String(extra.reply_to_id || '') || null,
+    replyToText: String(extra.reply_to_text || reply?.[1] || '') || null,
+    replyToIsOwn: Boolean(extra.reply_to_is_own || reply?.[0]?.includes('your previous message')),
+    receivedAt: String(extra.received_at || '') || undefined,
+    media: rawMedia,
+  };
+  recordInboundEvent(db, config, baseEvent);
   const active = db.prepare(`SELECT p.public_id,d.version,d.facebook_text,d.instagram_text,d.media_json
     FROM drafts d JOIN posts p ON p.id=d.post_id
     WHERE d.status='pending' AND p.status='awaiting_approval'
@@ -60,18 +83,14 @@ try {
         mediaCount: JSON.parse(active.media_json || '[]').length,
       } : null,
     });
-  } catch {
+  } catch (error) {
+    markInboundClassificationFailure(db, sourceId, error);
     db.close();
     console.log(JSON.stringify({ context: 'Shoham semantic analysis failed closed. Reply exactly NO_REPLY.' }));
     process.exit(1);
   }
   if (semantic.intent === 'group_conversation') {
     if (isPrivate) semantic = { ...semantic, intent: 'clarification', question: 'קיבלתי. אם זו תשובת אישור, אפשר לכתוב כאן: מאשר. אם זו הערה לסקיצה, כתבו מה בדיוק לשנות.' };
-    else {
-      db.close();
-      console.log(JSON.stringify({ context: 'Shoham semantic analysis identified ordinary group conversation. Reply exactly NO_REPLY.' }));
-      process.exit(0);
-    }
   }
   if (isPrivate && ['create_post', 'revise_draft', 'cancel_draft', 'system_control'].includes(semantic.intent)) {
     semantic = { intent: 'clarification', confidence: 1, reason: 'private_messages_never_become_public_content', question: 'קיבלתי את ההודעה בפרטי. כדי שלא אפרש אותה בטעות כתוכן לפרסום, כתבו אם זו הערה לסקיצה או אישור.' };
@@ -82,15 +101,9 @@ try {
     catch { media.push(item); }
   }
   const result = ingestEvent(db, config, {
-    id: String(extra.turn_id || `${payload.session_id}:${Date.now()}`),
-    chatId: String(extra.chat_id || config.groupId),
-    isPrivate,
-    senderId: String(extra.sender_id || 'unknown'),
-    senderName: String(extra.sender_name || ''),
-    text,
-    replyToId: String(extra.reply_to_id || '') || null,
+    ...baseEvent,
     replyToText: String(extra.reply_to_text || reply?.[1] || approvalClarification?.replyToText || '') || null,
-    replyToIsOwn: Boolean(extra.reply_to_is_own || reply?.[0]?.includes('your previous message') || approvalClarification),
+    replyToIsOwn: Boolean(baseEvent.replyToIsOwn || approvalClarification),
     semantic,
     media,
   });

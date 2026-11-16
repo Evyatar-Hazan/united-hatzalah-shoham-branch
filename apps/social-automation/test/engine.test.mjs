@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { openDatabase } from '../src/database.mjs';
-import { ingestEvent, resolveApprovalClarification, scheduleDueWork } from '../src/engine.mjs';
+import { ingestEvent, recordInboundEvent, resolveApprovalClarification, retireInactiveDrafts, scheduleDueWork } from '../src/engine.mjs';
 import { processJobs } from '../src/jobs.mjs';
 import { flushOutbox } from '../src/outbox.mjs';
 
@@ -43,6 +43,37 @@ test('duplicate inbound messages are idempotent', () => {
   } finally { f.close(); }
 });
 
+test('a message recorded before classification is processed exactly once afterwards', () => {
+  const f = fixture();
+  try {
+    const event = { id: 'preclassified', chatId: 'group@g.us', senderId: 'u1', text: 'שיחה בין חברי הקבוצה', media: [] };
+    assert.equal(recordInboundEvent(f.db, f.config, event).type, 'recorded');
+    const result = ingestEvent(f.db, f.config, { ...event, semantic: { intent: 'group_conversation', confidence: 0.99 } });
+    assert.equal(result.type, 'ignored_conversation');
+    assert.equal(f.db.prepare("SELECT processing_status FROM inbound_messages WHERE source_id='preclassified'").get().processing_status, 'processed');
+    assert.equal(ingestEvent(f.db, f.config, { ...event, semantic: { intent: 'group_conversation', confidence: 0.99 } }).type, 'duplicate');
+  } finally { f.close(); }
+});
+
+test('pending drafts belonging to inactive posts are retired with their reminder work', () => {
+  const f = fixture();
+  try {
+    const now = new Date('2026-11-16T08:00:00Z');
+    f.db.prepare(`INSERT INTO posts(public_id,status,source_kind,brief,media_json,created_at,updated_at)
+      VALUES('OLD','expired','morning','','[]',?,?)`).run(now.toISOString(), now.toISOString());
+    const post = f.db.prepare("SELECT id FROM posts WHERE public_id='OLD'").get();
+    f.db.prepare(`INSERT INTO drafts(post_id,version,facebook_text,instagram_text,media_json,fingerprint,status,created_at)
+      VALUES(?,1,'a','b','[]','old','pending',?)`).run(post.id, now.toISOString());
+    const draft = f.db.prepare('SELECT id FROM drafts WHERE post_id=?').get(post.id);
+    f.db.prepare(`INSERT INTO jobs(job_key,kind,payload_json,status,run_after,created_at,updated_at)
+      VALUES('old-reminder','approval_private_reminder',?,'pending',?,?,?)`)
+      .run(JSON.stringify({ draftId: draft.id }), now.toISOString(), now.toISOString(), now.toISOString());
+    assert.equal(retireInactiveDrafts(f.db), 1);
+    assert.equal(f.db.prepare('SELECT status FROM drafts WHERE id=?').get(draft.id).status, 'superseded');
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE job_key='old-reminder'").get().count, 0);
+  } finally { f.close(); }
+});
+
 test('one approval from the approved roster queues both channels', () => {
   const f = fixture();
   try {
@@ -57,6 +88,28 @@ test('one approval from the approved roster queues both channels', () => {
     assert.equal(result.type, 'approved');
     assert.deepEqual(result.channels, ['facebook', 'instagram']);
     assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM jobs WHERE kind='publish'").get().count, 2);
+  } finally { f.close(); }
+});
+
+test('an alternate verified WhatsApp LID for Erez is accepted and both identities are retained', () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'm1', chatId: 'group@g.us', senderId: 'member', text: 'אירוע רפואי', media: [] });
+    const outbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
+    f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-message', outbox.id);
+    const result = ingestEvent(f.db, f.config, {
+      id: 'approval-erez-alternate',
+      chatId: 'group@g.us',
+      senderId: '999999999999@lid',
+      senderIds: ['999999999999@lid', APPROVERS[0].senderId],
+      senderName: 'אגסי הפקות',
+      text: 'מאשר',
+      replyToId: 'draft-message',
+    });
+    assert.equal(result.type, 'approved');
+    assert.equal(result.approver, 'erez');
+    const identities = f.db.prepare("SELECT sender_id FROM approver_identities WHERE approver_key='erez' ORDER BY sender_id").all();
+    assert.deepEqual(identities.map((row) => row.sender_id), ['10001@lid', '999999999999@lid']);
   } finally { f.close(); }
 });
 
@@ -262,11 +315,12 @@ test('a revised version retires the prior approval and requires a fresh approval
   } finally { f.close(); }
 });
 
-test('an unapproved draft gets group and targeted Hermes reminders after thirty minutes', async () => {
+test('an unapproved draft gets a group reminder after thirty minutes and a private reminder after two hours', async () => {
   const f = fixture();
   try {
+    f.config.approvers = [APPROVERS[0]];
     const now = new Date('2026-11-08T06:30:00.000Z');
-    for (const person of APPROVERS) {
+    for (const person of f.config.approvers) {
       ingestEvent(f.db, f.config, {
         id: `learn-${person.key}`, chatId: 'group@g.us', senderId: person.senderId, senderName: person.name,
         text: 'הודעת קבוצה', semantic: { intent: 'group_conversation', confidence: 1 },
@@ -277,19 +331,20 @@ test('an unapproved draft gets group and targeted Hermes reminders after thirty 
     f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('draft-message', draftOutbox.id);
     await processJobs(f.db, f.config, new Date(now.getTime() + 31 * 60_000));
     const groupReminder = f.db.prepare("SELECT * FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:group:message'").get();
-    assert.match(groupReminder.body, /ארז, שלומי, דורי, שנהב/);
+    assert.match(groupReminder.body, /ארז/);
     assert.equal(groupReminder.target_chat_id, null);
-    const privateRows = f.db.prepare("SELECT target_chat_id,body,media_path FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' ORDER BY target_chat_id").all();
-    assert.deepEqual(privateRows.map((row) => row.target_chat_id), ['10001@lid', '10002@lid', '10003@lid', '10004@lid']);
-    for (const row of privateRows) {
-      assert.match(row.body, /הפוסט הבא עדיין ממתין לאישור שלך/);
-      assert.match(row.body, /פייסבוק:\nפעילות מתנדבים/);
-      assert.match(row.body, /אינסטגרם:\nפעילות מתנדבים/);
-      assert.equal(row.media_path, '/photo.jpg');
-    }
-    assert.ok(f.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%' AND entity_type='draft' AND entity_id IS NOT NULL").get().count === 4);
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:%'").get().count, 0);
+    await processJobs(f.db, f.config, new Date(now.getTime() + 121 * 60_000));
+    const privateRows = f.db.prepare("SELECT target_chat_id,body,media_path FROM outbox WHERE dedupe_key LIKE 'approval-reminder:%:private:1:%'").all();
+    assert.equal(privateRows.length, 1);
+    assert.equal(privateRows[0].target_chat_id, APPROVERS[0].senderId);
+    assert.match(privateRows[0].body, /הפוסט הבא עדיין ממתין לאישור שלך/);
+    assert.match(privateRows[0].body, /פייסבוק:\nפעילות מתנדבים/);
+    assert.match(privateRows[0].body, /אינסטגרם:\nפעילות מתנדבים/);
+    assert.equal(privateRows[0].media_path, '/photo.jpg');
     const next = f.db.prepare("SELECT * FROM jobs WHERE job_key LIKE 'approval-reminder:%:private:2'").get();
     assert.ok(next);
+    assert.equal(new Date(next.run_after).getTime(), now.getTime() + 241 * 60_000);
   } finally { f.close(); }
 });
 
@@ -300,8 +355,8 @@ test('private reminders never send to placeholder identities', async () => {
     ingestEvent(f.db, f.config, { id: 'draft', chatId: 'group@g.us', senderId: 'u1', text: 'פעילות מתנדבים', media: [] }, now);
     f.db.prepare(`INSERT INTO approver_identities(approver_key,display_name,sender_id,updated_at)
       VALUES('shenhav','שנהב','recovered-group-member-shanhav',?)
-      ON CONFLICT(approver_key) DO UPDATE SET sender_id=excluded.sender_id`).run(now.toISOString());
-    await processJobs(f.db, f.config, new Date(now.getTime() + 31 * 60_000));
+      ON CONFLICT(sender_id) DO UPDATE SET updated_at=excluded.updated_at`).run(now.toISOString());
+    await processJobs(f.db, f.config, new Date(now.getTime() + 121 * 60_000));
     const unsafe = f.db.prepare("SELECT COUNT(*) AS count FROM outbox WHERE target_chat_id='recovered-group-member-shanhav'").get();
     assert.equal(unsafe.count, 0);
   } finally { f.close(); }
