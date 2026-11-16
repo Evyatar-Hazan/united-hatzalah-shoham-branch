@@ -51,9 +51,13 @@ function queueOutbox(db, key, body, now, entityType = null, entityId = null, med
 }
 
 function chooseMedia(db, now) {
+  return chooseMediaCandidates(db, now, 1)[0] || null;
+}
+
+function chooseMediaCandidates(db, now, limit = 4) {
   const cutoff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
   return db.prepare(`SELECT * FROM media_usage
-    WHERE last_used_at IS NULL OR last_used_at<? ORDER BY RANDOM() LIMIT 1`).get(cutoff);
+    WHERE last_used_at IS NULL OR last_used_at<? ORDER BY RANDOM() LIMIT ?`).all(cutoff, limit);
 }
 
 function scheduleApprovalReminders(db, draftId, now) {
@@ -155,14 +159,14 @@ function runPrivateApprovalReminder(db, config, payload, job, now) {
 }
 
 async function runMorningJob(db, config, services, job, now) {
-  const media = chooseMedia(db, now);
-  if (!media) {
+  const candidates = chooseMediaCandidates(db, now);
+  if (!candidates.length) {
     queueOutbox(db, `${job.job_key}:missing-media`, 'לא מצאתי כרגע נכס מדיה מסונכרן מהמקורות המאושרים. אמשיך לבדוק; אם תרצו פוסט מסוים, שלחו כאן תמונה וטקסט.', now);
     return { status: 'waiting', error: 'approved_media_catalog_empty' };
   }
   const jobDate = String(job.job_key).match(/^morning:(\d{4}-\d{2}-\d{2})$/)?.[1] || now.toISOString().slice(0, 10);
   const publicId = `M${jobDate.replaceAll('-', '')}`;
-  const brief = `הצעת בוקר המבוססת על נכס מאושר: ${media.media_key}`;
+  const briefPrefix = 'הצעת בוקר המבוססת על נכס מאושר';
   const existing = db.prepare(`SELECT p.id AS post_id,d.id AS draft_id,d.facebook_text,d.instagram_text,d.media_json
     FROM posts p LEFT JOIN drafts d ON d.post_id=p.id AND d.status='pending'
     WHERE p.public_id=? ORDER BY d.version DESC LIMIT 1`).get(publicId);
@@ -173,13 +177,39 @@ async function runMorningJob(db, config, services, job, now) {
     return { status: 'done' };
   }
   const generate = services.generateCopy || generateCopy;
-  const metadata = JSON.parse(media.metadata_json || '{}');
-  const mediaItem = { key: media.media_key, ...metadata, source: metadata.source || media.source };
-  const copy = await generate(
-    config,
-    'הכן הצעת בוקר חיה שמבוססת על מה שנראה בתמונה המאושרת. התייחס רק לפרטים חזותיים ברורים, בלי להמציא את שם האירוע, מועד, אנשים או תוצאה. המסר צריך להיות קשור ישירות לתמונה ולא להיות פוסט כללי על התנדבות.',
-    { timeoutMs: 120_000, imagePaths: mediaItem.path ? [mediaItem.path] : [] },
-  );
+  let media;
+  let mediaItem;
+  let copy;
+  let lastClarification = null;
+  for (const candidate of candidates) {
+    const metadata = JSON.parse(candidate.metadata_json || '{}');
+    const candidateItem = { key: candidate.media_key, ...metadata, source: metadata.source || candidate.source };
+    try {
+      const candidateCopy = await generate(
+        config,
+        'הכן הצעת בוקר חיה שמבוססת על מה שנראה בתמונה המאושרת. התייחס רק לפרטים חזותיים ברורים, בלי להמציא את שם האירוע, מועד, אנשים או תוצאה. המסר צריך להיות קשור ישירות לתמונה ולא להיות פוסט כללי על התנדבות.',
+        { timeoutMs: 120_000, imagePaths: candidateItem.path ? [candidateItem.path] : [] },
+      );
+      if (!candidateCopy.facebook || !candidateCopy.instagram) {
+        lastClarification = candidateCopy.clarification;
+        continue;
+      }
+      media = candidate;
+      mediaItem = candidateItem;
+      copy = candidateCopy;
+      break;
+    } catch (error) {
+      lastClarification = `התמונה לא עברה את שער האיכות: ${error.message}`;
+    }
+  }
+  if (!copy) {
+    const first = candidates[0];
+    const firstMetadata = JSON.parse(first.metadata_json || '{}');
+    const firstPath = firstMetadata.path || firstMetadata.originalPath || firstMetadata.variants?.facebook || null;
+    queueOutbox(db, `${job.job_key}:clarification`, `לא מצאתי בארבע התמונות שנבדקו בסיס מספיק לפוסט מדויק. ${lastClarification || 'אפשר לשלוח הקשר קצר לתמונה או לבחור תמונה אחרת.'}`, now, null, null, firstPath);
+    return { status: 'waiting', error: 'morning_copy_needs_context' };
+  }
+  const brief = `${briefPrefix}: ${media.media_key}`;
   const mediaJson = JSON.stringify([mediaItem]);
   let postId = existing?.post_id || null;
   let draftId;
@@ -239,8 +269,19 @@ function runWeeklyReport(db, job, now) {
   const published = db.prepare("SELECT COUNT(*) AS count FROM publications WHERE status='published' AND updated_at>=?").get(since).count;
   const pending = db.prepare("SELECT COUNT(*) AS count FROM posts WHERE status='awaiting_approval'").get().count;
   const failures = db.prepare("SELECT COUNT(*) AS count FROM publications WHERE status='failed' AND updated_at>=?").get(since).count;
-  queueOutbox(db, `${job.job_key}:report`, `דוח שבועי קצר\n• פרסומים שהושלמו: ${published}\n• סקיצות שממתינות לאישור: ${pending}\n• כשלים פתוחים מהשבוע: ${failures}\n• המערכת שמרה checkpoint ולא תפרסם פריט פעמיים.`, now);
+  queueOutbox(db, `${job.job_key}:report`, `דוח שבועי קצר\n• פרסומים שהושלמו: ${published}\n• סקיצות שממתינות לאישור: ${pending}\n• כשלים פתוחים מהשבוע: ${failures}\n• המערכת שומרת checkpoint ומבצעת בדיקת כפילות לפני כל פרסום.`, now);
   return { status: 'done' };
+}
+
+function assertPublicationReceipt(channel, receipt) {
+  const url = String(receipt?.url || '');
+  if (!url) throw new Error('publisher did not return a verified URL');
+  if (channel === 'facebook' && !/^https:\/\/(?:www\.)?facebook\.com\//i.test(url)) {
+    throw new Error('publisher returned a non-Facebook URL for Facebook');
+  }
+  if (channel === 'instagram' && !/^https:\/\/(?:www\.)?instagram\.com\//i.test(url)) {
+    throw new Error('publisher returned a non-Instagram URL for Instagram');
+  }
 }
 
 async function runPublishJob(db, config, services, job, payload, now) {
@@ -267,12 +308,12 @@ async function runPublishJob(db, config, services, job, payload, now) {
       businessId: config.metaBusinessId,
       pageId: config.metaPageId,
       approvalFingerprint: draft.fingerprint,
-      verifyExisting: job.attempts > 0,
+      verifyExisting: true,
     }, { timeoutMs: 120_000 });
   } else {
     return { status: 'failed', error: 'meta_publisher_unavailable' };
   }
-  if (!receipt.url) throw new Error('publisher did not return a verified URL');
+  assertPublicationReceipt(payload.channel, receipt);
   db.prepare("UPDATE publications SET status='published', attempts=attempts+1, external_id=?, url=?, last_error=NULL, updated_at=? WHERE id=?")
     .run(receipt.id || null, receipt.url, nowIso(now), publication.id);
   const incomplete = db.prepare("SELECT COUNT(*) AS count FROM publications WHERE draft_id=? AND status!='published'").get(draft.id).count;

@@ -88,25 +88,63 @@ function findUploadButtonNode(node) {
   return null;
 }
 
-async function debuggerClickPublish(tabId) {
+async function debuggerVerifyChannelAndPublish(tabId, channel) {
   const target = { tabId };
   await chrome.debugger.attach(target, '1.3');
   try {
     const { result } = await chrome.debugger.sendCommand(target, 'Runtime.evaluate', {
-      expression: `(() => {
-        const candidates = [...document.querySelectorAll('button,[role="button"]')];
-        const button = candidates.find((element) => {
-          const label = (element.innerText || element.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
-          return /^(Publish|פרסום|פרסם)$/i.test(label) && !element.disabled && element.getAttribute('aria-disabled') !== 'true';
-        });
-        if (!button) return 'missing';
-        button.click();
-        return 'clicked';
+      expression: `(async () => {
+        const normalized = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+        const visible = (element) => {
+          const rect = element?.getBoundingClientRect();
+          const style = element ? getComputedStyle(element) : null;
+          return Boolean(rect && rect.width > 0 && rect.height > 0
+            && style?.visibility !== 'hidden' && style?.display !== 'none');
+        };
+        const accessibleText = (element) => {
+          const labelledBy = (element.getAttribute('aria-labelledby') || '').split(/\\s+/).filter(Boolean)
+            .map((id) => document.getElementById(id)?.textContent || '').join(' ');
+          return [element.getAttribute('aria-label') || '', labelledBy, element.innerText || ''].join(' ');
+        };
+        const combo = [...document.querySelectorAll('[aria-label],[aria-haspopup],[aria-expanded],button,[role="button"],[role="combobox"]')]
+          .filter(visible)
+          .find((element) => /Post to|פרסום ב/i.test(accessibleText(element)));
+        if (!combo) return { status: 'destination_missing' };
+        if (combo.getAttribute('aria-expanded') !== 'true') combo.click();
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const choices = [...document.querySelectorAll('[aria-selected]')].filter(visible);
+        const facebookChoices = choices.filter((element) => normalized(element.innerText) === 'איחוד הצלה סניף שוהם והמושבים');
+        const instagramChoices = choices.filter((element) => normalized(element.innerText) === 'ihud.shoham');
+        if (facebookChoices.length !== 1 || instagramChoices.length !== 1) {
+          return { status: 'destination_ambiguous', facebookChoices: facebookChoices.length, instagramChoices: instagramChoices.length };
+        }
+        const selected = (element) => element.getAttribute('aria-selected') === 'true';
+        const facebook = selected(facebookChoices[0]);
+        const instagram = selected(instagramChoices[0]);
+        if (facebook !== (${JSON.stringify(channel)} === 'facebook')
+          || instagram !== (${JSON.stringify(channel)} === 'instagram')) {
+          return { status: 'destination_mismatch', facebook, instagram };
+        }
+        combo.click();
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const publish = [...document.querySelectorAll('button,[role="button"]')]
+          .filter(visible)
+          .find((element) => {
+            const label = normalized(element.innerText || element.getAttribute('aria-label'));
+            return /^(Publish|פרסום|פרסם)$/i.test(label)
+              && !element.disabled && element.getAttribute('aria-disabled') !== 'true';
+          });
+        if (!publish) return { status: 'publish_missing', facebook, instagram };
+        publish.click();
+        return { status: 'clicked', facebook, instagram };
       })()`,
+      awaitPromise: true,
       userGesture: true,
       returnByValue: true,
     });
-    if (result.value !== 'clicked') throw new Error('meta_publish_button_missing');
+    const value = result.value;
+    if (value?.status !== 'clicked') throw new Error(`meta_atomic_channel_guard_failed:${JSON.stringify(value)}`);
+    return value;
   } finally {
     await chrome.debugger.detach(target).catch(() => {});
   }
@@ -408,7 +446,18 @@ async function prepareMetaPost(payload) {
       return [element.getAttribute('aria-label') || '', labelledBy, element.innerText || ''].join(' ');
     };
     const findDestinationCombo = () => [...document.querySelectorAll('[aria-label],[aria-haspopup],[aria-expanded],button,[role="button"],[role="combobox"]')]
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      })
       .find((element) => /Post to|פרסום ב/i.test(accessibleText(element)));
+    const visible = (element) => {
+      const rect = element?.getBoundingClientRect();
+      const style = element ? getComputedStyle(element) : null;
+      return Boolean(rect && rect.width > 0 && rect.height > 0
+        && style?.visibility !== 'hidden' && style?.display !== 'none');
+    };
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
       const combo = findDestinationCombo();
@@ -416,16 +465,25 @@ async function prepareMetaPost(payload) {
         if (combo.getAttribute('aria-expanded') !== 'true') combo.click();
         const optionDeadline = Date.now() + 10_000;
         while (Date.now() < optionDeadline) {
-          const choices = [...document.querySelectorAll('[aria-selected]')];
-          const facebook = choices.find((element) => normalized(element.innerText) === 'איחוד הצלה סניף שוהם והמושבים');
-          const instagram = choices.find((element) => normalized(element.innerText) === 'ihud.shoham');
-          if (facebook && instagram) {
+          const choices = [...document.querySelectorAll('[aria-selected]')].filter(visible);
+          const facebookChoices = choices.filter((element) => normalized(element.innerText) === 'איחוד הצלה סניף שוהם והמושבים');
+          const instagramChoices = choices.filter((element) => normalized(element.innerText) === 'ihud.shoham');
+          if (facebookChoices.length === 1 && instagramChoices.length === 1) {
+            let facebook = facebookChoices[0];
+            let instagram = instagramChoices[0];
             const selected = (element) => element.getAttribute('aria-selected') === 'true';
-            const wanted = channel === 'facebook' ? facebook : instagram;
-            const unwanted = channel === 'facebook' ? instagram : facebook;
-            if (!selected(wanted)) wanted.click();
-            if (selected(unwanted)) unwanted.click();
-            await new Promise((resolve) => setTimeout(resolve, 500));
+            for (let selectionAttempt = 0; selectionAttempt < 8; selectionAttempt += 1) {
+              const wanted = channel === 'facebook' ? facebook : instagram;
+              const unwanted = channel === 'facebook' ? instagram : facebook;
+              if (!selected(wanted)) wanted.click();
+              else if (selected(unwanted)) unwanted.click();
+              else break;
+              await new Promise((resolve) => setTimeout(resolve, 400));
+              const refreshed = [...document.querySelectorAll('[aria-selected]')].filter(visible);
+              facebook = refreshed.find((element) => normalized(element.innerText) === 'איחוד הצלה סניף שוהם והמושבים');
+              instagram = refreshed.find((element) => normalized(element.innerText) === 'ihud.shoham');
+              if (!facebook || !instagram) return null;
+            }
             const result = {
               facebook: selected(facebook),
               instagram: selected(instagram),
@@ -461,6 +519,12 @@ async function prepareMetaPost(payload) {
       return [element.getAttribute('aria-label') || '', labelledBy, element.innerText || ''].join(' ');
     };
     const deadline = Date.now() + 15_000;
+    const visible = (element) => {
+      const rect = element?.getBoundingClientRect();
+      const style = element ? getComputedStyle(element) : null;
+      return Boolean(rect && rect.width > 0 && rect.height > 0
+        && style?.visibility !== 'hidden' && style?.display !== 'none');
+    };
     let last = { mediaCount: 0, textMatches: false, channelMatches: false, publishReady: false };
     while (Date.now() < deadline) {
       const removeButtons = [...document.querySelectorAll('button,[role="button"]')]
@@ -474,12 +538,15 @@ async function prepareMetaPost(payload) {
         combo.click();
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
-      const choices = [...document.querySelectorAll('[aria-selected]')];
-      const facebook = choices.find((element) => normalized(element.innerText) === 'איחוד הצלה סניף שוהם והמושבים');
-      const instagram = choices.find((element) => normalized(element.innerText) === 'ihud.shoham');
+      const choices = [...document.querySelectorAll('[aria-selected]')].filter(visible);
+      const facebookMatches = choices.filter((element) => normalized(element.innerText) === 'איחוד הצלה סניף שוהם והמושבים');
+      const instagramMatches = choices.filter((element) => normalized(element.innerText) === 'ihud.shoham');
+      const facebook = facebookMatches.length === 1 ? facebookMatches[0] : null;
+      const instagram = instagramMatches.length === 1 ? instagramMatches[0] : null;
       const selected = (element) => element?.getAttribute('aria-selected') === 'true';
       const textMatches = normalized(editor?.value || editor?.innerText || editor?.textContent) === normalized(expectedText);
-      const channelMatches = selected(facebook) === (channel === 'facebook')
+      const channelMatches = Boolean(facebook && instagram)
+        && selected(facebook) === (channel === 'facebook')
         && selected(instagram) === (channel === 'instagram');
       const publish = [...document.querySelectorAll('button,[role="button"]')]
         .find((element) => /^(Publish|פרסום|פרסם)$/i.test(normalized(element.innerText || element.getAttribute('aria-label'))));
@@ -507,7 +574,7 @@ async function prepareMetaPost(payload) {
     return { prepared: true, dryRun: true, ...snapshot };
   }
   if (!payload.approvalFingerprint) throw new Error('exact_approval_required');
-  await debuggerClickPublish(tab.id);
+  await debuggerVerifyChannelAndPublish(tab.id, payload.channel);
   for (let attempt = 0; attempt < 12; attempt += 1) {
     await sleep(attempt ? 5_000 : 3_500);
     const url = await verifiedPublishedUrl(payload);
@@ -517,13 +584,17 @@ async function prepareMetaPost(payload) {
 }
 
 async function execute(command) {
-  if (command.type === 'health') return { ok: true, version: chrome.runtime.getManifest().version, build: '2026-11-16.14' };
+  if (command.type === 'health') return { ok: true, version: chrome.runtime.getManifest().version, build: '2026-11-16.15' };
   if (command.type === 'syncGooglePhotos') return syncGooglePhotos(command.payload || {});
   if (command.type === 'prepareMetaPost' || command.type === 'publishMeta') return prepareMetaPost({ ...command.payload, commandId: command.id, live: command.type === 'publishMeta' });
   throw new Error(`unknown_command:${command.type}`);
 }
 
+let pollInProgress = false;
+
 async function poll() {
+  if (pollInProgress) return;
+  pollInProgress = true;
   try {
     const capability = await profileCapability();
     const response = await fetch(`${BRIDGE.baseUrl}/next?capability=${encodeURIComponent(capability)}`, { headers: headers() });
@@ -541,6 +612,7 @@ async function poll() {
       });
     }
   } catch { /* The local worker may be offline while the Mac is asleep. */ }
+  finally { pollInProgress = false; }
 }
 
 chrome.alarms.create('poll', { periodInMinutes: 0.5 });

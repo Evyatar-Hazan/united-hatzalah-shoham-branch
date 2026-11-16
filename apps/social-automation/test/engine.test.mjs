@@ -608,6 +608,28 @@ test('dry-run publication never invokes an external publisher', async () => {
   } finally { f.close(); }
 });
 
+test('publication rejects a receipt URL from the wrong Meta channel', async () => {
+  const f = fixture();
+  try {
+    ingestEvent(f.db, f.config, { id: 'wrong-channel-source', chatId: 'group@g.us', senderId: 'u1', text: 'תרגול', media: [] });
+    const outbox = f.db.prepare("SELECT * FROM outbox WHERE entity_type='draft'").get();
+    f.db.prepare('UPDATE outbox SET platform_message_id=? WHERE id=?').run('wrong-channel-draft', outbox.id);
+    approve(f, 'wrong-channel-draft', 'wrong-channel-approval');
+    f.config.metaDryRun = false;
+    const browserBridge = {
+      async request(_type, payload) {
+        return payload.channel === 'facebook'
+          ? { id: 'ig-misroute', url: 'https://www.instagram.com/ihud.shoham/p/ig-misroute/' }
+          : { id: 'ig-post', url: 'https://www.instagram.com/ihud.shoham/p/ig-post/' };
+      },
+    };
+    const results = await processJobs(f.db, f.config, new Date(Date.now() + 10_000), 20, { browserBridge });
+    assert.equal(results[0].status, 'pending');
+    assert.match(results[0].error, /non-Facebook URL/);
+    assert.equal(f.db.prepare("SELECT status FROM publications WHERE channel='facebook'").get().status, 'queued');
+  } finally { f.close(); }
+});
+
 test('media sync splits approved albums into bounded browser batches', async () => {
   const f = fixture();
   try {
